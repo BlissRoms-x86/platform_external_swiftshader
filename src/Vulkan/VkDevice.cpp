@@ -12,10 +12,14 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+#include "VkDevice.hpp"
+
 #include "VkConfig.h"
 #include "VkDebug.hpp"
-#include "VkDevice.hpp"
+#include "VkDescriptorSetLayout.hpp"
 #include "VkQueue.hpp"
+#include "Device/Blitter.hpp"
+
 #include <new> // Must #include this to use "placement new"
 
 namespace vk
@@ -38,14 +42,29 @@ Device::Device(const Device::CreateInfo* info, void* mem)
 
 		for(uint32_t j = 0; j < queueCreateInfo.queueCount; j++, queueID++)
 		{
-			new (queues + queueID) Queue(queueCreateInfo.queueFamilyIndex, queueCreateInfo.pQueuePriorities[j]);
+			new (&queues[queueID]) Queue(queueCreateInfo.queueFamilyIndex, queueCreateInfo.pQueuePriorities[j]);
 		}
 	}
+
+	if(pCreateInfo->enabledLayerCount)
+	{
+		// "The ppEnabledLayerNames and enabledLayerCount members of VkDeviceCreateInfo are deprecated and their values must be ignored by implementations."
+		UNIMPLEMENTED("enabledLayerCount");   // TODO(b/119321052): UNIMPLEMENTED() should be used only for features that must still be implemented. Use a more informational macro here.
+	}
+
+	blitter = new sw::Blitter();
 }
 
 void Device::destroy(const VkAllocationCallbacks* pAllocator)
 {
+	for(uint32_t i = 0; i < queueCount; i++)
+	{
+		queues[i].destroy();
+	}
+
 	vk::deallocate(queues, pAllocator);
+
+	delete blitter;
 }
 
 size_t Device::ComputeRequiredAllocationSize(const Device::CreateInfo* info)
@@ -66,11 +85,38 @@ VkQueue Device::getQueue(uint32_t queueFamilyIndex, uint32_t queueIndex) const
 	return queues[queueIndex];
 }
 
+void Device::waitForFences(uint32_t fenceCount, const VkFence* pFences, VkBool32 waitAll, uint64_t timeout)
+{
+	// FIXME(b/117835459) : noop
+}
+
+void Device::waitIdle()
+{
+	for(uint32_t i = 0; i < queueCount; i++)
+	{
+		queues[i].waitIdle();
+	}
+}
+
 void Device::getDescriptorSetLayoutSupport(const VkDescriptorSetLayoutCreateInfo* pCreateInfo,
                                            VkDescriptorSetLayoutSupport* pSupport) const
 {
 	// Mark everything as unsupported
 	pSupport->supported = VK_FALSE;
+}
+
+void Device::updateDescriptorSets(uint32_t descriptorWriteCount, const VkWriteDescriptorSet* pDescriptorWrites,
+                                  uint32_t descriptorCopyCount, const VkCopyDescriptorSet* pDescriptorCopies)
+{
+	for(uint32_t i = 0; i < descriptorWriteCount; i++)
+	{
+		DescriptorSetLayout::WriteDescriptorSet(pDescriptorWrites[i]);
+	}
+
+	for(uint32_t i = 0; i < descriptorCopyCount; i++)
+	{
+		DescriptorSetLayout::CopyDescriptorSet(pDescriptorCopies[i]);
+	}
 }
 
 } // namespace vk

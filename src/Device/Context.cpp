@@ -15,11 +15,10 @@
 #include "Context.hpp"
 
 #include "Primitive.hpp"
-#include "Surface.hpp"
-#include "Pipeline/PixelShader.hpp"
-#include "Pipeline/VertexShader.hpp"
 #include "System/Memory.hpp"
-#include "System/Debug.hpp"
+#include "Vulkan/VkDebug.hpp"
+#include "Vulkan/VkImageView.hpp"
+#include "Pipeline/SpirvShader.hpp"
 
 #include <string.h>
 
@@ -27,8 +26,6 @@ namespace sw
 {
 	extern bool perspectiveCorrection;
 
-	bool halfIntegerCoordinates = false;     // Pixel centers are not at integer coordinates
-	bool symmetricNormalizedDepth = false;   // [-1, 1] instead of [0, 1]
 	bool booleanFaceRegister = false;
 	bool fullPixelPositionRegister = false;
 	bool leadingVertexFirst = false;         // Flat shading uses first vertex, else last
@@ -37,8 +34,6 @@ namespace sw
 
 	bool forceWindowed = false;
 	bool quadLayoutEnabled = false;
-	bool veryEarlyDepthTest = true;
-	bool complementaryDepthBuffer = false;
 	bool postBlendSRGB = false;
 	bool exactColorRounding = false;
 	TransparencyAntialiasing transparencyAntialiasing = TRANSPARENCY_NONE;
@@ -175,41 +170,25 @@ namespace sw
 		stencilBuffer = nullptr;
 
 		stencilEnable = false;
-		stencilCompareMode = STENCIL_ALWAYS;
-		stencilReference = 0;
-		stencilMask = 0xFFFFFFFF;
-		stencilFailOperation = OPERATION_KEEP;
-		stencilPassOperation = OPERATION_KEEP;
-		stencilZFailOperation = OPERATION_KEEP;
-		stencilWriteMask = 0xFFFFFFFF;
-
 		twoSidedStencil = false;
-		stencilCompareModeCCW = STENCIL_ALWAYS;
-		stencilReferenceCCW = 0;
-		stencilMaskCCW = 0xFFFFFFFF;
-		stencilFailOperationCCW = OPERATION_KEEP;
-		stencilPassOperationCCW = OPERATION_KEEP;
-		stencilZFailOperationCCW = OPERATION_KEEP;
-		stencilWriteMaskCCW = 0xFFFFFFFF;
-
-		alphaCompareMode = ALPHA_ALWAYS;
-		alphaTestEnable = false;
+		frontStencil = {};
+		backStencil = {};
 
 		rasterizerDiscard = false;
 
-		depthCompareMode = DEPTH_LESS;
-		depthBufferEnable = true;
-		depthWriteEnable = true;
+		depthCompareMode = VK_COMPARE_OP_LESS;
+		depthBufferEnable = false;
+		depthWriteEnable = false;
 
 		alphaBlendEnable = false;
-		sourceBlendFactorState = BLEND_ONE;
-		destBlendFactorState = BLEND_ZERO;
-		blendOperationState = BLENDOP_ADD;
+		sourceBlendFactorState = VK_BLEND_FACTOR_ONE;
+		destBlendFactorState = VK_BLEND_FACTOR_ZERO;
+		blendOperationState = VK_BLEND_OP_ADD;
 
 		separateAlphaBlendEnable = false;
-		sourceBlendFactorStateAlpha = BLEND_ONE;
-		destBlendFactorStateAlpha = BLEND_ZERO;
-		blendOperationStateAlpha = BLENDOP_ADD;
+		sourceBlendFactorStateAlpha = VK_BLEND_FACTOR_ONE;
+		destBlendFactorStateAlpha = VK_BLEND_FACTOR_ZERO;
+		blendOperationStateAlpha = VK_BLEND_OP_ADD;
 
 		cullMode = CULL_CLOCKWISE;
 		frontFacingCCW = true;
@@ -223,22 +202,19 @@ namespace sw
 			colorWriteMask[i] = 0x0000000F;
 		}
 
+		pipelineLayout = nullptr;
+
 		pixelShader = nullptr;
 		vertexShader = nullptr;
 
 		instanceID = 0;
 
 		occlusionEnabled = false;
-		transformFeedbackQueryEnabled = false;
-		transformFeedbackEnabled = 0;
 
 		lineWidth = 1.0f;
 
 		writeSRGB = false;
 		sampleMask = 0xFFFFFFFF;
-
-		colorLogicOpEnabled = false;
-		logicalOperation = LOGICALOP_COPY;
 	}
 
 	bool Context::setDepthBufferEnable(bool depthBufferEnable)
@@ -255,21 +231,21 @@ namespace sw
 		return modified;
 	}
 
-	bool Context::setSourceBlendFactor(BlendFactor sourceBlendFactor)
+	bool Context::setSourceBlendFactor(VkBlendFactor sourceBlendFactor)
 	{
 		bool modified = (Context::sourceBlendFactorState != sourceBlendFactor);
 		Context::sourceBlendFactorState = sourceBlendFactor;
 		return modified;
 	}
 
-	bool Context::setDestBlendFactor(BlendFactor destBlendFactor)
+	bool Context::setDestBlendFactor(VkBlendFactor destBlendFactor)
 	{
 		bool modified = (Context::destBlendFactorState != destBlendFactor);
 		Context::destBlendFactorState = destBlendFactor;
 		return modified;
 	}
 
-	bool Context::setBlendOperation(BlendOperation blendOperation)
+	bool Context::setBlendOperation(VkBlendOp blendOperation)
 	{
 		bool modified = (Context::blendOperationState != blendOperation);
 		Context::blendOperationState = blendOperation;
@@ -283,21 +259,21 @@ namespace sw
 		return modified;
 	}
 
-	bool Context::setSourceBlendFactorAlpha(BlendFactor sourceBlendFactorAlpha)
+	bool Context::setSourceBlendFactorAlpha(VkBlendFactor sourceBlendFactorAlpha)
 	{
 		bool modified = (Context::sourceBlendFactorStateAlpha != sourceBlendFactorAlpha);
 		Context::sourceBlendFactorStateAlpha = sourceBlendFactorAlpha;
 		return modified;
 	}
 
-	bool Context::setDestBlendFactorAlpha(BlendFactor destBlendFactorAlpha)
+	bool Context::setDestBlendFactorAlpha(VkBlendFactor destBlendFactorAlpha)
 	{
 		bool modified = (Context::destBlendFactorStateAlpha != destBlendFactorAlpha);
 		Context::destBlendFactorStateAlpha = destBlendFactorAlpha;
 		return modified;
 	}
 
-	bool Context::setBlendOperationAlpha(BlendOperation blendOperationAlpha)
+	bool Context::setBlendOperationAlpha(VkBlendOp blendOperationAlpha)
 	{
 		bool modified = (Context::blendOperationStateAlpha != blendOperationAlpha);
 		Context::blendOperationStateAlpha = blendOperationAlpha;
@@ -318,20 +294,6 @@ namespace sw
 		return modified;
 	}
 
-	bool Context::setColorLogicOpEnabled(bool enabled)
-	{
-		bool modified = (Context::colorLogicOpEnabled != enabled);
-		Context::colorLogicOpEnabled = enabled;
-		return modified;
-	}
-
-	bool Context::setLogicalOperation(LogicalOperation logicalOperation)
-	{
-		bool modified = (Context::logicalOperation != logicalOperation);
-		Context::logicalOperation = logicalOperation;
-		return modified;
-	}
-
 	bool Context::depthWriteActive()
 	{
 		if(!depthBufferActive()) return false;
@@ -341,12 +303,7 @@ namespace sw
 
 	bool Context::alphaTestActive()
 	{
-		if(transparencyAntialiasing != TRANSPARENCY_NONE) return true;
-		if(!alphaTestEnable) return false;
-		if(alphaCompareMode == ALPHA_ALWAYS) return false;
-		if(alphaReference == 0.0f && alphaCompareMode == ALPHA_GREATEREQUAL) return false;
-
-		return true;
+		return transparencyAntialiasing != TRANSPARENCY_NONE;
 	}
 
 	bool Context::depthBufferActive()
@@ -371,31 +328,26 @@ namespace sw
 			return false;
 		}
 
-		bool colorBlend = !(blendOperation() == BLENDOP_SOURCE && sourceBlendFactor() == BLEND_ONE);
-		bool alphaBlend = separateAlphaBlendEnable ? !(blendOperationAlpha() == BLENDOP_SOURCE && sourceBlendFactorAlpha() == BLEND_ONE) : colorBlend;
+		bool colorBlend = !(blendOperation() == VK_BLEND_OP_SRC_EXT && sourceBlendFactor() == VK_BLEND_FACTOR_ONE);
+		bool alphaBlend = separateAlphaBlendEnable ? !(blendOperationAlpha() == VK_BLEND_OP_SRC_EXT && sourceBlendFactorAlpha() == VK_BLEND_FACTOR_ONE) : colorBlend;
 
 		return colorBlend || alphaBlend;
 	}
 
-	LogicalOperation Context::colorLogicOp()
+	VkBlendFactor Context::sourceBlendFactor()
 	{
-		return colorLogicOpEnabled ? logicalOperation : LOGICALOP_COPY;
-	}
-
-	BlendFactor Context::sourceBlendFactor()
-	{
-		if(!alphaBlendEnable) return BLEND_ONE;
+		if(!alphaBlendEnable) return VK_BLEND_FACTOR_ONE;
 
 		switch(blendOperationState)
 		{
-		case BLENDOP_ADD:
-		case BLENDOP_SUB:
-		case BLENDOP_INVSUB:
+		case VK_BLEND_OP_ADD:
+		case VK_BLEND_OP_SUBTRACT:
+		case VK_BLEND_OP_REVERSE_SUBTRACT:
 			return sourceBlendFactorState;
-		case BLENDOP_MIN:
-			return BLEND_ONE;
-		case BLENDOP_MAX:
-			return BLEND_ONE;
+		case VK_BLEND_OP_MIN:
+			return VK_BLEND_FACTOR_ONE;
+		case VK_BLEND_OP_MAX:
+			return VK_BLEND_FACTOR_ONE;
 		default:
 			ASSERT(false);
 		}
@@ -403,20 +355,20 @@ namespace sw
 		return sourceBlendFactorState;
 	}
 
-	BlendFactor Context::destBlendFactor()
+	VkBlendFactor Context::destBlendFactor()
 	{
-		if(!alphaBlendEnable) return BLEND_ZERO;
+		if(!alphaBlendEnable) return VK_BLEND_FACTOR_ONE;
 
 		switch(blendOperationState)
 		{
-		case BLENDOP_ADD:
-		case BLENDOP_SUB:
-		case BLENDOP_INVSUB:
+		case VK_BLEND_OP_ADD:
+		case VK_BLEND_OP_SUBTRACT:
+		case VK_BLEND_OP_REVERSE_SUBTRACT:
 			return destBlendFactorState;
-		case BLENDOP_MIN:
-			return BLEND_ONE;
-		case BLENDOP_MAX:
-			return BLEND_ONE;
+		case VK_BLEND_OP_MIN:
+			return VK_BLEND_FACTOR_ONE;
+		case VK_BLEND_OP_MAX:
+			return VK_BLEND_FACTOR_ONE;
 		default:
 			ASSERT(false);
 		}
@@ -424,111 +376,111 @@ namespace sw
 		return destBlendFactorState;
 	}
 
-	BlendOperation Context::blendOperation()
+	VkBlendOp Context::blendOperation()
 	{
-		if(!alphaBlendEnable) return BLENDOP_SOURCE;
+		if(!alphaBlendEnable) return VK_BLEND_OP_SRC_EXT;
 
 		switch(blendOperationState)
 		{
-		case BLENDOP_ADD:
-			if(sourceBlendFactor() == BLEND_ZERO)
+		case VK_BLEND_OP_ADD:
+			if(sourceBlendFactor() == VK_BLEND_FACTOR_ZERO)
 			{
-				if(destBlendFactor() == BLEND_ZERO)
+				if(destBlendFactor() == VK_BLEND_FACTOR_ZERO)
 				{
-					return BLENDOP_NULL;
+					return VK_BLEND_OP_ZERO_EXT;
 				}
 				else
 				{
-					return BLENDOP_DEST;
+					return VK_BLEND_OP_DST_EXT;
 				}
 			}
-			else if(sourceBlendFactor() == BLEND_ONE)
+			else if(sourceBlendFactor() == VK_BLEND_FACTOR_ONE)
 			{
-				if(destBlendFactor() == BLEND_ZERO)
+				if(destBlendFactor() == VK_BLEND_FACTOR_ZERO)
 				{
-					return BLENDOP_SOURCE;
+					return VK_BLEND_OP_SRC_EXT;
 				}
 				else
 				{
-					return BLENDOP_ADD;
+					return VK_BLEND_OP_ADD;
 				}
 			}
 			else
 			{
-				if(destBlendFactor() == BLEND_ZERO)
+				if(destBlendFactor() == VK_BLEND_FACTOR_ZERO)
 				{
-					return BLENDOP_SOURCE;
+					return VK_BLEND_OP_SRC_EXT;
 				}
 				else
 				{
-					return BLENDOP_ADD;
+					return VK_BLEND_OP_ADD;
 				}
 			}
-		case BLENDOP_SUB:
-			if(sourceBlendFactor() == BLEND_ZERO)
+		case VK_BLEND_OP_SUBTRACT:
+			if(sourceBlendFactor() == VK_BLEND_FACTOR_ZERO)
 			{
-				return BLENDOP_NULL;   // Negative, clamped to zero
+				return VK_BLEND_OP_ZERO_EXT;   // Negative, clamped to zero
 			}
-			else if(sourceBlendFactor() == BLEND_ONE)
+			else if(sourceBlendFactor() == VK_BLEND_FACTOR_ONE)
 			{
-				if(destBlendFactor() == BLEND_ZERO)
+				if(destBlendFactor() == VK_BLEND_FACTOR_ZERO)
 				{
-					return BLENDOP_SOURCE;
+					return VK_BLEND_OP_SRC_EXT;
 				}
 				else
 				{
-					return BLENDOP_SUB;
+					return VK_BLEND_OP_SUBTRACT;
 				}
 			}
 			else
 			{
-				if(destBlendFactor() == BLEND_ZERO)
+				if(destBlendFactor() == VK_BLEND_FACTOR_ZERO)
 				{
-					return BLENDOP_SOURCE;
+					return VK_BLEND_OP_SRC_EXT;
 				}
 				else
 				{
-					return BLENDOP_SUB;
+					return VK_BLEND_OP_SUBTRACT;
 				}
 			}
-		case BLENDOP_INVSUB:
-			if(sourceBlendFactor() == BLEND_ZERO)
+		case VK_BLEND_OP_REVERSE_SUBTRACT:
+			if(sourceBlendFactor() == VK_BLEND_FACTOR_ZERO)
 			{
-				if(destBlendFactor() == BLEND_ZERO)
+				if(destBlendFactor() == VK_BLEND_FACTOR_ZERO)
 				{
-					return BLENDOP_NULL;
+					return VK_BLEND_OP_ZERO_EXT;
 				}
 				else
 				{
-					return BLENDOP_DEST;
+					return VK_BLEND_OP_DST_EXT;
 				}
 			}
-			else if(sourceBlendFactor() == BLEND_ONE)
+			else if(sourceBlendFactor() == VK_BLEND_FACTOR_ONE)
 			{
-				if(destBlendFactor() == BLEND_ZERO)
+				if(destBlendFactor() == VK_BLEND_FACTOR_ZERO)
 				{
-					return BLENDOP_NULL;   // Negative, clamped to zero
+					return VK_BLEND_OP_ZERO_EXT;   // Negative, clamped to zero
 				}
 				else
 				{
-					return BLENDOP_INVSUB;
+					return VK_BLEND_OP_REVERSE_SUBTRACT;
 				}
 			}
 			else
 			{
-				if(destBlendFactor() == BLEND_ZERO)
+				if(destBlendFactor() == VK_BLEND_FACTOR_ZERO)
 				{
-					return BLENDOP_NULL;   // Negative, clamped to zero
+					return VK_BLEND_OP_ZERO_EXT;   // Negative, clamped to zero
 				}
 				else
 				{
-					return BLENDOP_INVSUB;
+					return VK_BLEND_OP_REVERSE_SUBTRACT;
 				}
 			}
-		case BLENDOP_MIN:
-			return BLENDOP_MIN;
-		case BLENDOP_MAX:
-			return BLENDOP_MAX;
+		case VK_BLEND_OP_MIN:
+			return VK_BLEND_OP_MIN;
+		case VK_BLEND_OP_MAX:
+			return VK_BLEND_OP_MAX;
 		default:
 			ASSERT(false);
 		}
@@ -536,7 +488,7 @@ namespace sw
 		return blendOperationState;
 	}
 
-	BlendFactor Context::sourceBlendFactorAlpha()
+	VkBlendFactor Context::sourceBlendFactorAlpha()
 	{
 		if(!separateAlphaBlendEnable)
 		{
@@ -546,14 +498,14 @@ namespace sw
 		{
 			switch(blendOperationStateAlpha)
 			{
-			case BLENDOP_ADD:
-			case BLENDOP_SUB:
-			case BLENDOP_INVSUB:
+			case VK_BLEND_OP_ADD:
+			case VK_BLEND_OP_SUBTRACT:
+			case VK_BLEND_OP_REVERSE_SUBTRACT:
 				return sourceBlendFactorStateAlpha;
-			case BLENDOP_MIN:
-				return BLEND_ONE;
-			case BLENDOP_MAX:
-				return BLEND_ONE;
+			case VK_BLEND_OP_MIN:
+				return VK_BLEND_FACTOR_ONE;
+			case VK_BLEND_OP_MAX:
+				return VK_BLEND_FACTOR_ONE;
 			default:
 				ASSERT(false);
 			}
@@ -562,7 +514,7 @@ namespace sw
 		}
 	}
 
-	BlendFactor Context::destBlendFactorAlpha()
+	VkBlendFactor Context::destBlendFactorAlpha()
 	{
 		if(!separateAlphaBlendEnable)
 		{
@@ -572,14 +524,14 @@ namespace sw
 		{
 			switch(blendOperationStateAlpha)
 			{
-			case BLENDOP_ADD:
-			case BLENDOP_SUB:
-			case BLENDOP_INVSUB:
+			case VK_BLEND_OP_ADD:
+			case VK_BLEND_OP_SUBTRACT:
+			case VK_BLEND_OP_REVERSE_SUBTRACT:
 				return destBlendFactorStateAlpha;
-			case BLENDOP_MIN:
-				return BLEND_ONE;
-			case BLENDOP_MAX:
-				return BLEND_ONE;
+			case VK_BLEND_OP_MIN:
+				return VK_BLEND_FACTOR_ONE;
+			case VK_BLEND_OP_MAX:
+				return VK_BLEND_FACTOR_ONE;
 			default:
 				ASSERT(false);
 			}
@@ -588,7 +540,7 @@ namespace sw
 		}
 	}
 
-	BlendOperation Context::blendOperationAlpha()
+	VkBlendOp Context::blendOperationAlpha()
 	{
 		if(!separateAlphaBlendEnable)
 		{
@@ -598,105 +550,105 @@ namespace sw
 		{
 			switch(blendOperationStateAlpha)
 			{
-			case BLENDOP_ADD:
-				if(sourceBlendFactorAlpha() == BLEND_ZERO)
+			case VK_BLEND_OP_ADD:
+				if(sourceBlendFactorAlpha() == VK_BLEND_FACTOR_ZERO)
 				{
-					if(destBlendFactorAlpha() == BLEND_ZERO)
+					if(destBlendFactorAlpha() == VK_BLEND_FACTOR_ZERO)
 					{
-						return BLENDOP_NULL;
+						return VK_BLEND_OP_ZERO_EXT;
 					}
 					else
 					{
-						return BLENDOP_DEST;
+						return VK_BLEND_OP_DST_EXT;
 					}
 				}
-				else if(sourceBlendFactorAlpha() == BLEND_ONE)
+				else if(sourceBlendFactorAlpha() == VK_BLEND_FACTOR_ONE)
 				{
-					if(destBlendFactorAlpha() == BLEND_ZERO)
+					if(destBlendFactorAlpha() == VK_BLEND_FACTOR_ZERO)
 					{
-						return BLENDOP_SOURCE;
+						return VK_BLEND_OP_SRC_EXT;
 					}
 					else
 					{
-						return BLENDOP_ADD;
+						return VK_BLEND_OP_ADD;
 					}
 				}
 				else
 				{
-					if(destBlendFactorAlpha() == BLEND_ZERO)
+					if(destBlendFactorAlpha() == VK_BLEND_FACTOR_ZERO)
 					{
-						return BLENDOP_SOURCE;
+						return VK_BLEND_OP_SRC_EXT;
 					}
 					else
 					{
-						return BLENDOP_ADD;
+						return VK_BLEND_OP_ADD;
 					}
 				}
-			case BLENDOP_SUB:
-				if(sourceBlendFactorAlpha() == BLEND_ZERO)
+			case VK_BLEND_OP_SUBTRACT:
+				if(sourceBlendFactorAlpha() == VK_BLEND_FACTOR_ZERO)
 				{
-					return BLENDOP_NULL;   // Negative, clamped to zero
+					return VK_BLEND_OP_ZERO_EXT;   // Negative, clamped to zero
 				}
-				else if(sourceBlendFactorAlpha() == BLEND_ONE)
+				else if(sourceBlendFactorAlpha() == VK_BLEND_FACTOR_ONE)
 				{
-					if(destBlendFactorAlpha() == BLEND_ZERO)
+					if(destBlendFactorAlpha() == VK_BLEND_FACTOR_ZERO)
 					{
-						return BLENDOP_SOURCE;
+						return VK_BLEND_OP_SRC_EXT;
 					}
 					else
 					{
-						return BLENDOP_SUB;
+						return VK_BLEND_OP_SUBTRACT;
 					}
 				}
 				else
 				{
-					if(destBlendFactorAlpha() == BLEND_ZERO)
+					if(destBlendFactorAlpha() == VK_BLEND_FACTOR_ZERO)
 					{
-						return BLENDOP_SOURCE;
+						return VK_BLEND_OP_SRC_EXT;
 					}
 					else
 					{
-						return BLENDOP_SUB;
+						return VK_BLEND_OP_SUBTRACT;
 					}
 				}
-			case BLENDOP_INVSUB:
-				if(sourceBlendFactorAlpha() == BLEND_ZERO)
+			case VK_BLEND_OP_REVERSE_SUBTRACT:
+				if(sourceBlendFactorAlpha() == VK_BLEND_FACTOR_ZERO)
 				{
-					if(destBlendFactorAlpha() == BLEND_ZERO)
+					if(destBlendFactorAlpha() == VK_BLEND_FACTOR_ZERO)
 					{
-						return BLENDOP_NULL;
+						return VK_BLEND_OP_ZERO_EXT;
 					}
 					else
 					{
-						return BLENDOP_DEST;
+						return VK_BLEND_OP_DST_EXT;
 					}
 				}
-				else if(sourceBlendFactorAlpha() == BLEND_ONE)
+				else if(sourceBlendFactorAlpha() == VK_BLEND_FACTOR_ONE)
 				{
-					if(destBlendFactorAlpha() == BLEND_ZERO)
+					if(destBlendFactorAlpha() == VK_BLEND_FACTOR_ZERO)
 					{
-						return BLENDOP_NULL;   // Negative, clamped to zero
+						return VK_BLEND_OP_ZERO_EXT;   // Negative, clamped to zero
 					}
 					else
 					{
-						return BLENDOP_INVSUB;
+						return VK_BLEND_OP_REVERSE_SUBTRACT;
 					}
 				}
 				else
 				{
-					if(destBlendFactorAlpha() == BLEND_ZERO)
+					if(destBlendFactorAlpha() == VK_BLEND_FACTOR_ZERO)
 					{
-						return BLENDOP_NULL;   // Negative, clamped to zero
+						return VK_BLEND_OP_ZERO_EXT;   // Negative, clamped to zero
 					}
 					else
 					{
-						return BLENDOP_INVSUB;
+						return VK_BLEND_OP_ZERO_EXT;
 					}
 				}
-			case BLENDOP_MIN:
-				return BLENDOP_MIN;
-			case BLENDOP_MAX:
-				return BLENDOP_MAX;
+			case VK_BLEND_OP_MIN:
+				return VK_BLEND_OP_MIN;
+			case VK_BLEND_OP_MAX:
+				return VK_BLEND_OP_MAX;
 			default:
 				ASSERT(false);
 			}
@@ -725,47 +677,40 @@ namespace sw
 		return true;
 	}
 
-	unsigned short Context::pixelShaderModel() const
-	{
-		return pixelShader ? pixelShader->getShaderModel() : 0x0000;
-	}
-
-	unsigned short Context::vertexShaderModel() const
-	{
-		return vertexShader ? vertexShader->getShaderModel() : 0x0000;
-	}
-
-	int Context::getMultiSampleCount() const
-	{
-		return renderTarget[0] ? renderTarget[0]->getMultiSampleCount() : 1;
-	}
-
-	Format Context::renderTargetInternalFormat(int index)
+	VkFormat Context::renderTargetInternalFormat(int index)
 	{
 		if(renderTarget[index])
 		{
-			return renderTarget[index]->getInternalFormat();
+			return renderTarget[index]->getFormat();
 		}
 		else
 		{
-			return FORMAT_NULL;
+			return VK_FORMAT_UNDEFINED;
 		}
 	}
 
-	int Context::colorWriteActive()
+	bool Context::colorWriteActive()
 	{
-		return colorWriteActive(0) | colorWriteActive(1) | colorWriteActive(2) | colorWriteActive(3);
+		for (int i = 0; i < RENDERTARGETS; i++)
+		{
+			if (colorWriteActive(i))
+			{
+				return true;
+			}
+		}
+
+		return false;
 	}
 
 	int Context::colorWriteActive(int index)
 	{
-		if(!renderTarget[index] || renderTarget[index]->getInternalFormat() == FORMAT_NULL)
+		if(!renderTarget[index] || renderTarget[index]->getFormat() == VK_FORMAT_UNDEFINED)
 		{
 			return 0;
 		}
 
-		if(blendOperation() == BLENDOP_DEST && destBlendFactor() == BLEND_ONE &&
-		   (!separateAlphaBlendEnable || (blendOperationAlpha() == BLENDOP_DEST && destBlendFactorAlpha() == BLEND_ONE)))
+		if(blendOperation() == VK_BLEND_OP_DST_EXT && destBlendFactor() == VK_BLEND_FACTOR_ONE &&
+		   (!separateAlphaBlendEnable || (blendOperationAlpha() == VK_BLEND_OP_DST_EXT && destBlendFactorAlpha() == VK_BLEND_FACTOR_ONE)))
 		{
 			return 0;
 		}
@@ -775,6 +720,6 @@ namespace sw
 
 	bool Context::colorUsed()
 	{
-		return colorWriteActive() || alphaTestActive() || (pixelShader && pixelShader->containsKill());
+		return colorWriteActive() || alphaTestActive() || (pixelShader && pixelShader->getModes().ContainsKill);
 	}
 }

@@ -15,11 +15,17 @@
 #ifndef sw_Blitter_hpp
 #define sw_Blitter_hpp
 
-#include "Surface.hpp"
 #include "RoutineCache.hpp"
 #include "Reactor/Reactor.hpp"
+#include "System/MutexLock.hpp"
+#include "Vulkan/VkFormat.h"
 
 #include <string.h>
+
+namespace vk
+{
+	class Image;
+}
 
 namespace sw
 {
@@ -57,15 +63,17 @@ namespace sw
 		{
 			State() = default;
 			State(const Options &options) : Options(options) {}
+			State(vk::Format sourceFormat, vk::Format destFormat, int destSamples, const Options &options) :
+				Options(options), sourceFormat(sourceFormat), destFormat(destFormat), destSamples(destSamples) {}
 
 			bool operator==(const State &state) const
 			{
 				return memcmp(this, &state, sizeof(State)) == 0;
 			}
 
-			Format sourceFormat;
-			Format destFormat;
-			int destSamples;
+			vk::Format sourceFormat = VK_FORMAT_UNDEFINED;
+			vk::Format destFormat = VK_FORMAT_UNDEFINED;
+			int destSamples = 0;
 		};
 
 		struct BlitData
@@ -94,23 +102,22 @@ namespace sw
 		Blitter();
 		virtual ~Blitter();
 
-		void clear(void *pixel, sw::Format format, Surface *dest, const SliceRect &dRect, unsigned int rgbaMask);
-		void blit(Surface *source, const SliceRectF &sRect, Surface *dest, const SliceRect &dRect, const Options &options);
-		void blit3D(Surface *source, Surface *dest);
+		void clear(void *pixel, vk::Format format, vk::Image *dest, const VkImageSubresourceRange& subresourceRange, const VkRect2D* renderArea = nullptr);
+
+		void blit(vk::Image *src, vk::Image *dst, VkImageBlit region, VkFilter filter);
 
 	private:
-		bool fastClear(void *pixel, sw::Format format, Surface *dest, const SliceRect &dRect, unsigned int rgbaMask);
+		bool fastClear(void *pixel, vk::Format format, vk::Image *dest, const VkImageSubresourceRange& subresourceRange, const VkRect2D* renderArea);
 
 		bool read(Float4 &color, Pointer<Byte> element, const State &state);
 		bool write(Float4 &color, Pointer<Byte> element, const State &state);
 		bool read(Int4 &color, Pointer<Byte> element, const State &state);
 		bool write(Int4 &color, Pointer<Byte> element, const State &state);
-		static bool GetScale(float4& scale, Format format);
 		static bool ApplyScaleAndClamp(Float4 &value, const State &state, bool preScaled = false);
 		static Int ComputeOffset(Int &x, Int &y, Int &pitchB, int bytes, bool quadLayout);
 		static Float4 LinearToSRGB(Float4 &color);
 		static Float4 sRGBtoLinear(Float4 &color);
-		bool blitReactor(Surface *source, const SliceRectF &sRect, Surface *dest, const SliceRect &dRect, const Options &options);
+		Routine *getRoutine(const State &state);
 		Routine *generate(const State &state);
 
 		RoutineCache<State> *blitCache;

@@ -18,6 +18,12 @@
 #include "VkObject.hpp"
 #include <vulkan/vk_icd.h>
 
+namespace sw
+{
+	class Context;
+	class Renderer;
+}
+
 namespace vk
 {
 
@@ -34,7 +40,14 @@ public:
 		return reinterpret_cast<VkQueue>(this);
 	}
 
+	void destroy();
+	void submit(uint32_t submitCount, const VkSubmitInfo* pSubmits, VkFence fence);
+	void waitIdle();
+	void present(const VkPresentInfoKHR* presentInfo);
+
 private:
+	sw::Context* context = nullptr;
+	sw::Renderer* renderer = nullptr;
 	uint32_t familyIndex = 0;
 	float    priority = 0.0f;
 };

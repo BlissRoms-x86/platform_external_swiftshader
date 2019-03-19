@@ -18,7 +18,8 @@
 #include "VkConfig.h"
 #include "VkDebug.hpp"
 #include "VkMemory.h"
-#include <vulkan/vulkan.h>
+
+#include <vulkan/vulkan_core.h>
 #include <vulkan/vk_icd.h>
 
 namespace vk
@@ -143,7 +144,8 @@ public:
 
 	static inline T* Cast(VkT vkObject)
 	{
-		return &(reinterpret_cast<DispatchableObject<T, VkT>*>(vkObject)->object);
+		return (vkObject == VK_NULL_HANDLE) ? nullptr :
+		       &(reinterpret_cast<DispatchableObject<T, VkT>*>(vkObject)->object);
 	}
 
 	operator VkT()

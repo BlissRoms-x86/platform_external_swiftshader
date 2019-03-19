@@ -1645,6 +1645,27 @@ Program *Context::getCurrentProgram() const
 	return mResourceManager->getProgram(mState.currentProgram);
 }
 
+Texture *Context::getTargetTexture(GLenum target) const
+{
+	Texture *texture = nullptr;
+
+	switch(target)
+	{
+	case GL_TEXTURE_2D:            texture = getTexture2D();       break;
+	case GL_TEXTURE_2D_ARRAY:      texture = getTexture2DArray();  break;
+	case GL_TEXTURE_3D:            texture = getTexture3D();       break;
+	case GL_TEXTURE_CUBE_MAP:      texture = getTextureCubeMap();  break;
+	case GL_TEXTURE_EXTERNAL_OES:  texture = getTextureExternal(); break;
+	case GL_TEXTURE_RECTANGLE_ARB: texture = getTexture2DRect();   break;
+	default:
+		return error(GL_INVALID_ENUM, nullptr);
+	}
+
+	ASSERT(texture);  // Must always have a default texture to fall back to.
+
+	return texture;
+}
+
 Texture2D *Context::getTexture2D() const
 {
 	return static_cast<Texture2D*>(getSamplerTexture(mState.activeSampler, TEXTURE_2D));
@@ -3628,6 +3649,11 @@ void Context::drawElements(GLenum mode, GLuint start, GLuint end, GLsizei count,
 		return;   // Nothing to process.
 	}
 
+	if(count == 0)
+	{
+		return;
+	}
+
 	if(!indices && !getCurrentVertexArray()->getElementArrayBuffer())
 	{
 		return error(GL_INVALID_OPERATION);
@@ -4464,6 +4490,7 @@ const GLubyte *Context::getExtensions(GLuint index, GLuint *numExt) const
 		"GL_OES_depth_texture_cube_map",
 		"GL_OES_EGL_image",
 		"GL_OES_EGL_image_external",
+		"GL_OES_EGL_image_external_essl3", // client version is always 3, so this is fine
 		"GL_OES_EGL_sync",
 		"GL_OES_element_index_uint",
 		"GL_OES_fbo_render_mipmap",

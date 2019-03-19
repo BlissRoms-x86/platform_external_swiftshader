@@ -15,11 +15,12 @@
 #ifndef VK_UTILS_HPP_
 #define VK_UTILS_HPP_
 
-#include <vulkan/vulkan.h>
+#include <vulkan/vulkan_core.h>
 
 namespace vk
 {
-	PFN_vkVoidFunction GetProcAddr(const char* pName);
+PFN_vkVoidFunction GetInstanceProcAddr(VkInstance instance, const char* pName);
+PFN_vkVoidFunction GetDeviceProcAddr(VkDevice device, const char* pName);
 }
 
 #endif // VK_UTILS_HPP_
