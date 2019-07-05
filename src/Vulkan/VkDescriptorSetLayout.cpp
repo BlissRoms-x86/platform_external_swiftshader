@@ -13,6 +13,7 @@
 // limitations under the License.
 
 #include "VkDescriptorSetLayout.hpp"
+#include "VkDescriptorSet.hpp"
 #include "System/Types.hpp"
 
 #include <algorithm>
@@ -20,17 +21,6 @@
 
 namespace
 {
-
-struct DescriptorSet
-{
-	vk::DescriptorSetLayout* layout;
-	uint8_t data[];
-};
-
-static inline DescriptorSet* Cast(VkDescriptorSet object)
-{
-	return reinterpret_cast<DescriptorSet*>(object);
-}
 
 static bool UsesImmutableSamplers(const VkDescriptorSetLayoutBinding& binding)
 {
@@ -118,13 +108,20 @@ size_t DescriptorSetLayout::GetDescriptorSize(VkDescriptorType type)
 	return 0;
 }
 
-size_t DescriptorSetLayout::getSize() const
+size_t DescriptorSetLayout::getDescriptorSetAllocationSize() const
+{
+	// vk::DescriptorSet has a layout member field.
+	return sizeof(vk::DescriptorSetLayout*) + getDescriptorSetDataSize();
+}
+
+size_t DescriptorSetLayout::getDescriptorSetDataSize() const
 {
 	size_t size = 0;
 	for(uint32_t i = 0; i < bindingCount; i++)
 	{
 		size += bindings[i].descriptorCount * GetDescriptorSize(bindings[i].descriptorType);
 	}
+
 	return size;
 }
 
@@ -138,14 +135,14 @@ uint32_t DescriptorSetLayout::getBindingIndex(uint32_t binding) const
 		}
 	}
 
-	ASSERT(false); // Bindings should always be found
+	DABORT("Invalid DescriptorSetLayout binding: %d", int(binding));
 	return 0;
 }
 
 void DescriptorSetLayout::initialize(VkDescriptorSet vkDescriptorSet)
 {
 	// Use a pointer to this descriptor set layout as the descriptor set's header
-	DescriptorSet* descriptorSet = ::Cast(vkDescriptorSet);
+	DescriptorSet* descriptorSet = vk::Cast(vkDescriptorSet);
 	descriptorSet->layout = this;
 	uint8_t* mem = descriptorSet->data;
 
@@ -168,19 +165,72 @@ void DescriptorSetLayout::initialize(VkDescriptorSet vkDescriptorSet)
 	}
 }
 
-size_t DescriptorSetLayout::getBindingOffset(uint32_t binding) const
+size_t DescriptorSetLayout::getBindingCount() const
 {
-	uint32_t index = getBindingIndex(binding);
-	return bindingOffsets[index] + OFFSET(DescriptorSet, data[0]);
+	return bindingCount;
 }
 
-uint8_t* DescriptorSetLayout::getOffsetPointer(VkDescriptorSet descriptorSet, uint32_t binding, uint32_t arrayElement, uint32_t count, size_t* typeSize) const
+size_t DescriptorSetLayout::getBindingOffset(uint32_t binding, uint32_t arrayElement) const
+{
+	uint32_t index = getBindingIndex(binding);
+	auto typeSize = GetDescriptorSize(bindings[index].descriptorType);
+	return bindingOffsets[index] + OFFSET(DescriptorSet, data[0]) + (typeSize * arrayElement);
+}
+
+bool DescriptorSetLayout::isDynamic(VkDescriptorType type)
+{
+	return type == VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC ||
+		   type == VK_DESCRIPTOR_TYPE_STORAGE_BUFFER_DYNAMIC;
+}
+
+bool DescriptorSetLayout::isBindingDynamic(uint32_t binding) const
+{
+	uint32_t index = getBindingIndex(binding);
+	return isDynamic(bindings[index].descriptorType);
+}
+
+size_t DescriptorSetLayout::getDynamicDescriptorCount() const
+{
+	size_t count = 0;
+	for (size_t i = 0; i < bindingCount; i++)
+	{
+		if (isDynamic(bindings[i].descriptorType))
+		{
+			count += bindings[i].descriptorCount;
+		}
+	}
+	return count;
+}
+
+size_t DescriptorSetLayout::getDynamicDescriptorOffset(uint32_t binding) const
+{
+	uint32_t n = getBindingIndex(binding);
+	ASSERT(isDynamic(bindings[n].descriptorType));
+
+	size_t index = 0;
+	for (uint32_t i = 0; i < n; i++)
+	{
+		if (isDynamic(bindings[i].descriptorType))
+		{
+			index += bindings[i].descriptorCount;
+		}
+	}
+	return index;
+}
+
+VkDescriptorSetLayoutBinding const & DescriptorSetLayout::getBindingLayout(uint32_t binding) const
+{
+	uint32_t index = getBindingIndex(binding);
+	return bindings[index];
+}
+
+uint8_t* DescriptorSetLayout::getOffsetPointer(DescriptorSet *descriptorSet, uint32_t binding, uint32_t arrayElement, uint32_t count, size_t* typeSize) const
 {
 	uint32_t index = getBindingIndex(binding);
 	*typeSize = GetDescriptorSize(bindings[index].descriptorType);
 	size_t byteOffset = bindingOffsets[index] + (*typeSize * arrayElement);
-	ASSERT(((*typeSize * count) + byteOffset) <= getSize()); // Make sure the operation will not go out of bounds
-	return &(::Cast(descriptorSet)->data[byteOffset]);
+	ASSERT(((*typeSize * count) + byteOffset) <= getDescriptorSetDataSize()); // Make sure the operation will not go out of bounds
+	return &descriptorSet->data[byteOffset];
 }
 
 const uint8_t* DescriptorSetLayout::GetInputData(const VkWriteDescriptorSet& descriptorWrites)
@@ -211,12 +261,13 @@ const uint8_t* DescriptorSetLayout::GetInputData(const VkWriteDescriptorSet& des
 
 void DescriptorSetLayout::WriteDescriptorSet(const VkWriteDescriptorSet& descriptorWrites)
 {
-	DescriptorSet* dstSet = ::Cast(descriptorWrites.dstSet);
+	DescriptorSet* dstSet = vk::Cast(descriptorWrites.dstSet);
 	DescriptorSetLayout* dstLayout = dstSet->layout;
 	ASSERT(dstLayout);
+	ASSERT(dstLayout->bindings[dstLayout->getBindingIndex(descriptorWrites.dstBinding)].descriptorType == descriptorWrites.descriptorType);
 
 	size_t typeSize = 0;
-	uint8_t* memToWrite = dstLayout->getOffsetPointer(descriptorWrites.dstSet, descriptorWrites.dstBinding, descriptorWrites.dstArrayElement, descriptorWrites.descriptorCount, &typeSize);
+	uint8_t* memToWrite = dstLayout->getOffsetPointer(dstSet, descriptorWrites.dstBinding, descriptorWrites.dstArrayElement, descriptorWrites.descriptorCount, &typeSize);
 
 	// If the dstBinding has fewer than descriptorCount array elements remaining
 	// starting from dstArrayElement, then the remainder will be used to update
@@ -230,19 +281,19 @@ void DescriptorSetLayout::WriteDescriptorSet(const VkWriteDescriptorSet& descrip
 
 void DescriptorSetLayout::CopyDescriptorSet(const VkCopyDescriptorSet& descriptorCopies)
 {
-	DescriptorSet* srcSet = ::Cast(descriptorCopies.srcSet);
+	DescriptorSet* srcSet = vk::Cast(descriptorCopies.srcSet);
 	DescriptorSetLayout* srcLayout = srcSet->layout;
 	ASSERT(srcLayout);
 
-	DescriptorSet* dstSet = ::Cast(descriptorCopies.dstSet);
+	DescriptorSet* dstSet = vk::Cast(descriptorCopies.dstSet);
 	DescriptorSetLayout* dstLayout = dstSet->layout;
 	ASSERT(dstLayout);
 
 	size_t srcTypeSize = 0;
-	uint8_t* memToRead = srcLayout->getOffsetPointer(descriptorCopies.srcSet, descriptorCopies.srcBinding, descriptorCopies.srcArrayElement, descriptorCopies.descriptorCount, &srcTypeSize);
+	uint8_t* memToRead = srcLayout->getOffsetPointer(srcSet, descriptorCopies.srcBinding, descriptorCopies.srcArrayElement, descriptorCopies.descriptorCount, &srcTypeSize);
 
 	size_t dstTypeSize = 0;
-	uint8_t* memToWrite = dstLayout->getOffsetPointer(descriptorCopies.dstSet, descriptorCopies.dstBinding, descriptorCopies.dstArrayElement, descriptorCopies.descriptorCount, &dstTypeSize);
+	uint8_t* memToWrite = dstLayout->getOffsetPointer(dstSet, descriptorCopies.dstBinding, descriptorCopies.dstArrayElement, descriptorCopies.descriptorCount, &dstTypeSize);
 
 	ASSERT(srcTypeSize == dstTypeSize);
 	size_t writeSize = dstTypeSize * descriptorCopies.descriptorCount;

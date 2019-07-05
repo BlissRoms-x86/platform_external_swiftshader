@@ -23,8 +23,10 @@
 #include <cstdio>
 
 #include <string>
+#include <tuple>
+#include <unordered_set>
 
-#undef Bool
+#undef Bool // b/127920555
 
 #if !defined(NDEBUG) && (REACTOR_LLVM_VERSION >= 7)
 #define ENABLE_RR_PRINT 1 // Enables RR_PRINT(), RR_WATCH()
@@ -80,9 +82,37 @@ namespace rr
 
 	class Variable
 	{
-	protected:
+		friend class Nucleus;
 		friend class PrintValue;
-		Value *address;
+
+		Variable() = delete;
+		Variable &operator=(const Variable&) = delete;
+
+	public:
+		void materialize() const;
+
+		Value *loadValue() const;
+		Value *storeValue(Value *value) const;
+
+		Value *getBaseAddress() const;
+		Value *getElementPointer(Value *index, bool unsignedIndex) const;
+
+	protected:
+		Variable(Type *type, int arraySize);
+		Variable(const Variable&) = default;
+
+		~Variable();
+
+	private:
+		static void materializeAll();
+		static void killUnmaterialized();
+
+		static std::unordered_set<Variable*> unmaterializedVariables;
+
+		Type *const type;
+		const int arraySize;
+		mutable Value *rvalue = nullptr;
+		mutable Value *address = nullptr;
 	};
 
 	template<class T>
@@ -97,10 +127,6 @@ namespace rr
 		{
 			return false;
 		}
-
-		Value *loadValue() const;
-		Value *storeValue(Value *value) const;
-		Value *getAddress(Value *index, bool unsignedIndex) const;
 	};
 
 	template<class T>
@@ -899,9 +925,9 @@ namespace rr
 		Short8(const Reference<Short8> &rhs);
 		Short8(RValue<Short4> lo, RValue<Short4> hi);
 
-	//	RValue<Short8> operator=(RValue<Short8> rhs);
-	//	RValue<Short8> operator=(const Short8 &rhs);
-	//	RValue<Short8> operator=(const Reference<Short8> &rhs);
+		RValue<Short8> operator=(RValue<Short8> rhs);
+		RValue<Short8> operator=(const Short8 &rhs);
+		RValue<Short8> operator=(const Reference<Short8> &rhs);
 
 		static Type *getType();
 	};
@@ -2234,6 +2260,18 @@ namespace rr
 	RValue<Pointer<Byte>> operator-=(Pointer<Byte> &lhs, RValue<Int> offset);
 	RValue<Pointer<Byte>> operator-=(Pointer<Byte> &lhs, RValue<UInt> offset);
 
+	template<typename T>
+	RValue<T> Load(RValue<Pointer<T>> pointer, unsigned int alignment, bool atomic, std::memory_order memoryOrder)
+	{
+		return RValue<T>(Nucleus::createLoad(pointer.value, T::getType(), false, alignment, atomic, memoryOrder));
+	}
+
+	template<typename T>
+	void Store(RValue<T> value, RValue<Pointer<T>> pointer, unsigned int alignment, bool atomic, std::memory_order memoryOrder)
+	{
+		Nucleus::createStore(value.value, pointer.value, T::getType(), false, alignment, atomic, memoryOrder);
+	}
+
 	template<class T, int S = 1>
 	class Array : public LValue<T>
 	{
@@ -2262,21 +2300,6 @@ namespace rr
 	template<class T>
 	void Return(RValue<Pointer<T>> ret);
 
-	template<unsigned int index, typename... Arguments>
-	struct ArgI;
-
-	template<typename Arg0, typename... Arguments>
-	struct ArgI<0, Arg0, Arguments...>
-	{
-		typedef Arg0 Type;
-	};
-
-	template<unsigned int index, typename Arg0, typename... Arguments>
-	struct ArgI<index, Arg0, Arguments...>
-	{
-		typedef typename ArgI<index - 1, Arguments...>::Type Type;
-	};
-
 	// Generic template, leave undefined!
 	template<typename FunctionType>
 	class Function;
@@ -2291,10 +2314,10 @@ namespace rr
 		virtual ~Function();
 
 		template<int index>
-		Argument<typename ArgI<index, Arguments...>::Type> Arg() const
+		Argument<typename std::tuple_element<index, std::tuple<Arguments...>>::type> Arg() const
 		{
 			Value *arg = Nucleus::getArgument(index);
-			return Argument<typename ArgI<index, Arguments...>::Type>(arg);
+			return Argument<typename std::tuple_element<index, std::tuple<Arguments...>>::type>(arg);
 		}
 
 		Routine *operator()(const char *name, ...);
@@ -2309,45 +2332,74 @@ namespace rr
 	{
 	};
 
-	template<int index, typename Return, typename... Arguments>
-	Argument<typename ArgI<index, Arguments...>::Type> Arg(Function<Return(Arguments...)> &function)
-	{
-		return Argument<typename ArgI<index, Arguments...>::Type>(function.arg(index));
-	}
-
 	RValue<Long> Ticks();
 }
 
 namespace rr
 {
 	template<class T>
-	LValue<T>::LValue(int arraySize)
+	LValue<T>::LValue(int arraySize) : Variable(T::getType(), arraySize)
 	{
-		address = Nucleus::allocateStackVariable(T::getType(), arraySize);
 	}
 
-	template<class T>
-	Value *LValue<T>::loadValue() const
+	inline void Variable::materialize() const
 	{
-		return Nucleus::createLoad(address, T::getType(), false, 0);
+		if(!address)
+		{
+			address = Nucleus::allocateStackVariable(type, arraySize);
+
+			if(rvalue)
+			{
+				storeValue(rvalue);
+				rvalue = nullptr;
+			}
+		}
 	}
 
-	template<class T>
-	Value *LValue<T>::storeValue(Value *value) const
+	inline Value *Variable::loadValue() const
 	{
-		return Nucleus::createStore(value, address, T::getType(), false, 0);
+		if(rvalue)
+		{
+			return rvalue;
+		}
+
+		if(!address)
+		{
+			// TODO: Return undef instead.
+			materialize();
+		}
+
+		return Nucleus::createLoad(address, type, false, 0);
 	}
 
-	template<class T>
-	Value *LValue<T>::getAddress(Value *index, bool unsignedIndex) const
+	inline Value *Variable::storeValue(Value *value) const
 	{
-		return Nucleus::createGEP(address, T::getType(), index, unsignedIndex);
+		if(address)
+		{
+			return Nucleus::createStore(value, address, type, false, 0);
+		}
+
+		rvalue = value;
+
+		return value;
+	}
+
+	inline Value *Variable::getBaseAddress() const
+	{
+		materialize();
+
+		return address;
+	}
+
+	inline Value *Variable::getElementPointer(Value *index, bool unsignedIndex) const
+	{
+		return Nucleus::createGEP(getBaseAddress(), type, index, unsignedIndex);
 	}
 
 	template<class T>
 	RValue<Pointer<T>> LValue<T>::operator&()
 	{
-		return RValue<Pointer<T>>(address);
+		return RValue<Pointer<T>>(getBaseAddress());
 	}
 
 	template<class T>
@@ -2574,6 +2626,7 @@ namespace rr
 	template<class T>
 	Pointer<T>::Pointer(Argument<Pointer<T>> argument) : alignment(1)
 	{
+		LValue<Pointer<T>>::materialize();  // FIXME(b/129757459)
 		LValue<Pointer<T>>::storeValue(argument.value);
 	}
 
@@ -2681,7 +2734,7 @@ namespace rr
 	template<class T, int S>
 	Reference<T> Array<T, S>::operator[](int index)
 	{
-		Value *element = LValue<T>::getAddress(Nucleus::createConstantInt(index), false);
+		Value *element = LValue<T>::getElementPointer(Nucleus::createConstantInt(index), false);
 
 		return Reference<T>(element);
 	}
@@ -2689,7 +2742,7 @@ namespace rr
 	template<class T, int S>
 	Reference<T> Array<T, S>::operator[](unsigned int index)
 	{
-		Value *element = LValue<T>::getAddress(Nucleus::createConstantInt(index), true);
+		Value *element = LValue<T>::getElementPointer(Nucleus::createConstantInt(index), true);
 
 		return Reference<T>(element);
 	}
@@ -2697,7 +2750,7 @@ namespace rr
 	template<class T, int S>
 	Reference<T> Array<T, S>::operator[](RValue<Int> index)
 	{
-		Value *element = LValue<T>::getAddress(index.value, false);
+		Value *element = LValue<T>::getElementPointer(index.value, false);
 
 		return Reference<T>(element);
 	}
@@ -2705,7 +2758,7 @@ namespace rr
 	template<class T, int S>
 	Reference<T> Array<T, S>::operator[](RValue<UInt> index)
 	{
-		Value *element = LValue<T>::getAddress(index.value, true);
+		Value *element = LValue<T>::getElementPointer(index.value, true);
 
 		return Reference<T>(element);
 	}
@@ -3120,7 +3173,11 @@ namespace rr
 	// See: https://renenyffenegger.ch/notes/development/languages/C-C-plus-plus/preprocessor/macros/__VA_ARGS__/count-arguments
 	// Note, this doesn't attempt to use the ##__VA_ARGS__ trick to handle 0
 	// args as this appears to still be broken on certain compilers.
-	#define RR_GET_NTH_ARG(_1, _2, _3, _4, _5, _6, _7, _8, _9, _10, _11, _12, _13, _14, _15, _16, N, ...) N
+	// MSVC also has issues with variadic macros which requires the RR_VA_MSVC_BUG() work-around.
+	// See: https://stackoverflow.com/a/48711060
+	#define RR_VA_MSVC_BUG(MACRO, ARGS) MACRO ARGS
+	#define RR_GET_NTH_ARG_EX(_1, _2, _3, _4, _5, _6, _7, _8, _9, _10, _11, _12, _13, _14, _15, _16, N, ...) N
+	#define RR_GET_NTH_ARG(...) RR_VA_MSVC_BUG(RR_GET_NTH_ARG_EX, (__VA_ARGS__))
 	#define RR_COUNT_ARGUMENTS(...) RR_GET_NTH_ARG(__VA_ARGS__, 16, 15, 14, 13, 12, 11, 10, 9, 8, 7, 6, 5, 4, 3, 2, 1, 0)
 	static_assert(1 == RR_COUNT_ARGUMENTS(a), "RR_COUNT_ARGUMENTS broken"); // Sanity checks.
 	static_assert(2 == RR_COUNT_ARGUMENTS(a, b), "RR_COUNT_ARGUMENTS broken");

@@ -47,7 +47,7 @@ namespace sw
 			return;
 		}
 
-		State state(format, dest->getFormat(aspect), dest->getSampleCountFlagBits(), { 0xF });
+		State state(format, dest->getFormat(aspect), 1, dest->getSampleCountFlagBits(), { 0xF });
 		Routine *blitRoutine = getRoutine(state);
 		if(!blitRoutine)
 		{
@@ -89,6 +89,7 @@ namespace sw
 
 				format.bytes(),                                       // sPitchB
 				dest->rowPitchBytes(aspect, subresLayers.mipLevel),   // dPitchB
+				0,                                                    // sSliceB (unused in clear operations)
 				dest->slicePitchBytes(aspect, subresLayers.mipLevel), // dSliceB
 
 				0.5f, 0.5f, 0.0f, 0.0f, // x0, y0, w, h
@@ -1413,6 +1414,21 @@ namespace sw
 							{
 								return nullptr;
 							}
+
+							if(state.srcSamples > 1) // Resolve multisampled source
+							{
+								Float4 accum = color;
+								for(int i = 1; i < state.srcSamples; i++)
+								{
+									s += *Pointer<Int>(blit + OFFSET(BlitData, sSliceB));
+									if(!read(color, s, state))
+									{
+										return nullptr;
+									}
+									accum += color;
+								}
+								color = accum * Float4(1.0f / static_cast<float>(state.srcSamples));
+							}
 						}
 						else   // Bilinear filtering
 						{
@@ -1543,12 +1559,21 @@ namespace sw
 		VkImageAspectFlagBits srcAspect = static_cast<VkImageAspectFlagBits>(region.srcSubresource.aspectMask);
 		VkImageAspectFlagBits dstAspect = static_cast<VkImageAspectFlagBits>(region.dstSubresource.aspectMask);
 
-		State state(src->getFormat(srcAspect), dst->getFormat(dstAspect), dst->getSampleCountFlagBits(),
-		            { filter != VK_FILTER_NEAREST, srcAspect == VK_IMAGE_ASPECT_STENCIL_BIT, filter != VK_FILTER_NEAREST });
+		float widthRatio = static_cast<float>(region.srcOffsets[1].x - region.srcOffsets[0].x) /
+		                   static_cast<float>(region.dstOffsets[1].x - region.dstOffsets[0].x);
+		float heightRatio = static_cast<float>(region.srcOffsets[1].y - region.srcOffsets[0].y) /
+		                    static_cast<float>(region.dstOffsets[1].y - region.dstOffsets[0].y);
+		float x0 = region.srcOffsets[0].x + (0.5f - region.dstOffsets[0].x) * widthRatio;
+		float y0 = region.srcOffsets[0].y + (0.5f - region.dstOffsets[0].y) * heightRatio;
+
+		bool doFilter = (filter != VK_FILTER_NEAREST);
+		State state(src->getFormat(srcAspect), dst->getFormat(dstAspect), src->getSampleCountFlagBits(), dst->getSampleCountFlagBits(),
+		            { doFilter, srcAspect == VK_IMAGE_ASPECT_STENCIL_BIT, doFilter });
 		state.clampToEdge = (region.srcOffsets[0].x < 0) ||
 		                    (region.srcOffsets[0].y < 0) ||
 		                    (static_cast<uint32_t>(region.srcOffsets[1].x) > srcExtent.width) ||
-		                    (static_cast<uint32_t>(region.srcOffsets[1].y) > srcExtent.height);
+		                    (static_cast<uint32_t>(region.srcOffsets[1].y) > srcExtent.height) ||
+		                    (doFilter && ((x0 < 0.5f) || (y0 < 0.5f)));
 
 		Routine *blitRoutine = getRoutine(state);
 		if(!blitRoutine)
@@ -1558,26 +1583,28 @@ namespace sw
 
 		void(*blitFunction)(const BlitData *data) = (void(*)(const BlitData*))blitRoutine->getEntry();
 
-		BlitData data;
+		BlitData data =
+		{
+			nullptr, // source
+			nullptr, // dest
+			src->rowPitchBytes(srcAspect, region.srcSubresource.mipLevel),   // sPitchB
+			dst->rowPitchBytes(dstAspect, region.dstSubresource.mipLevel),   // dPitchB
+			src->slicePitchBytes(srcAspect, region.srcSubresource.mipLevel), // sSliceB
+			dst->slicePitchBytes(dstAspect, region.dstSubresource.mipLevel), // dSliceB
 
-		data.sPitchB = src->rowPitchBytes(srcAspect, region.srcSubresource.mipLevel);
-		data.dPitchB = dst->rowPitchBytes(dstAspect, region.dstSubresource.mipLevel);
-		data.dSliceB = dst->slicePitchBytes(dstAspect, region.dstSubresource.mipLevel);
+			x0,
+			y0,
+			widthRatio,
+			heightRatio,
 
-		data.w = static_cast<float>(region.srcOffsets[1].x - region.srcOffsets[0].x) /
-		         static_cast<float>(region.dstOffsets[1].x - region.dstOffsets[0].x);
-		data.h = static_cast<float>(region.srcOffsets[1].y - region.srcOffsets[0].y) /
-		         static_cast<float>(region.dstOffsets[1].y - region.dstOffsets[0].y);
-		data.x0 = region.srcOffsets[0].x + (0.5f - region.dstOffsets[0].x) * data.w;
-		data.y0 = region.srcOffsets[0].y + (0.5f - region.dstOffsets[0].y) * data.h;
+			region.dstOffsets[0].y, // y0d
+			region.dstOffsets[1].y, // y1d
+			region.dstOffsets[0].x, // x0d
+			region.dstOffsets[1].x, // x1d
 
-		data.x0d = region.dstOffsets[0].x;
-		data.x1d = region.dstOffsets[1].x;
-		data.y0d = region.dstOffsets[0].y;
-		data.y1d = region.dstOffsets[1].y;
-
-		data.sWidth = srcExtent.width;
-		data.sHeight = srcExtent.height;
+			static_cast<int>(srcExtent.width), // sWidth
+			static_cast<int>(srcExtent.height) // sHeight;
+		};
 
 		VkOffset3D srcOffset = { 0, 0, region.srcOffsets[0].z };
 		VkOffset3D dstOffset = { 0, 0, region.dstOffsets[0].z };

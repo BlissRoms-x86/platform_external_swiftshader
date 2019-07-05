@@ -39,8 +39,8 @@ const VkPhysicalDeviceFeatures& PhysicalDevice::getFeatures() const
 		false, // sampleRateShading
 		false, // dualSrcBlend
 		false, // logicOp
-		false, // multiDrawIndirect
-		false, // drawIndirectFirstInstance
+		true, // multiDrawIndirect
+		true, // drawIndirectFirstInstance
 		false, // depthClamp
 		false, // depthBiasClamp
 		false, // fillModeNonSolid
@@ -147,7 +147,7 @@ const VkPhysicalDeviceLimits& PhysicalDevice::getLimits() const
 		65536, // maxTexelBufferElements
 		16384, // maxUniformBufferRange
 		(1ul << 27), // maxStorageBufferRange
-		128, // maxPushConstantsSize
+		vk::MAX_PUSH_CONSTANT_SIZE, // maxPushConstantsSize
 		4096, // maxMemoryAllocationCount
 		4000, // maxSamplerAllocationCount
 		131072, // bufferImageGranularity
@@ -162,9 +162,9 @@ const VkPhysicalDeviceLimits& PhysicalDevice::getLimits() const
 		128, // maxPerStageResources
 		96, // maxDescriptorSetSamplers
 		72, // maxDescriptorSetUniformBuffers
-		8, // maxDescriptorSetUniformBuffersDynamic
+		MAX_DESCRIPTOR_SET_UNIFORM_BUFFERS_DYNAMIC, // maxDescriptorSetUniformBuffersDynamic
 		24, // maxDescriptorSetStorageBuffers
-		4, // maxDescriptorSetStorageBuffersDynamic
+		MAX_DESCRIPTOR_SET_STORAGE_BUFFERS_DYNAMIC, // maxDescriptorSetStorageBuffersDynamic
 		96, // maxDescriptorSetSampledImages
 		24, // maxDescriptorSetStorageImages
 		4, // maxDescriptorSetInputAttachments

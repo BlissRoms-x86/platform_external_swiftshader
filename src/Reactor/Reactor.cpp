@@ -14,8 +14,46 @@
 
 #include "Reactor.hpp"
 
+// Define REACTOR_MATERIALIZE_LVALUES_ON_DEFINITION to non-zero to ensure all
+// variables have a stack location obtained throuch alloca().
+#ifndef REACTOR_MATERIALIZE_LVALUES_ON_DEFINITION
+#define REACTOR_MATERIALIZE_LVALUES_ON_DEFINITION 0
+#endif
+
 namespace rr
 {
+	// Set of variables that do not have a stack location yet.
+	std::unordered_set<Variable*> Variable::unmaterializedVariables;
+
+	Variable::Variable(Type *type, int arraySize) : type(type), arraySize(arraySize)
+	{
+		#if REACTOR_MATERIALIZE_LVALUES_ON_DEFINITION
+			materialize();
+		#else
+			unmaterializedVariables.emplace(this);
+		#endif
+	}
+
+	Variable::~Variable()
+	{
+		unmaterializedVariables.erase(this);
+	}
+
+	void Variable::materializeAll()
+	{
+		for(auto *var : unmaterializedVariables)
+		{
+			var->materialize();
+		}
+
+		unmaterializedVariables.clear();
+	}
+
+	void Variable::killUnmaterialized()
+	{
+		unmaterializedVariables.clear();
+	}
+
 	static Value *createSwizzle4(Value *val, unsigned char select)
 	{
 		int swizzle[4] =
@@ -51,6 +89,7 @@ namespace rr
 
 	Bool::Bool(Argument<Bool> argument)
 	{
+		materialize();  // FIXME(b/129757459)
 		storeValue(argument.value);
 	}
 
@@ -126,6 +165,7 @@ namespace rr
 
 	Byte::Byte(Argument<Byte> argument)
 	{
+		materialize();  // FIXME(b/129757459)
 		storeValue(argument.value);
 	}
 
@@ -383,6 +423,7 @@ namespace rr
 
 	SByte::SByte(Argument<SByte> argument)
 	{
+		materialize();  // FIXME(b/129757459)
 		storeValue(argument.value);
 	}
 
@@ -628,6 +669,7 @@ namespace rr
 
 	Short::Short(Argument<Short> argument)
 	{
+		materialize();  // FIXME(b/129757459)
 		storeValue(argument.value);
 	}
 
@@ -866,6 +908,7 @@ namespace rr
 
 	UShort::UShort(Argument<UShort> argument)
 	{
+		materialize();  // FIXME(b/129757459)
 		storeValue(argument.value);
 	}
 
@@ -1960,6 +2003,29 @@ namespace rr
 		storeValue(packed);
 	}
 
+	RValue<Short8> Short8::operator=(RValue<Short8> rhs)
+	{
+		storeValue(rhs.value);
+
+		return rhs;
+	}
+
+	RValue<Short8> Short8::operator=(const Short8 &rhs)
+	{
+		Value *value = rhs.loadValue();
+		storeValue(value);
+
+		return RValue<Short8>(value);
+	}
+
+	RValue<Short8> Short8::operator=(const Reference<Short8> &rhs)
+	{
+		Value *value = rhs.loadValue();
+		storeValue(value);
+
+		return RValue<Short8>(value);
+	}
+
 	RValue<Short8> operator+(RValue<Short8> lhs, RValue<Short8> rhs)
 	{
 		return RValue<Short8>(Nucleus::createAdd(lhs.value, rhs.value));
@@ -2058,6 +2124,7 @@ namespace rr
 
 	Int::Int(Argument<Int> argument)
 	{
+		materialize();  // FIXME(b/129757459)
 		storeValue(argument.value);
 	}
 
@@ -2442,6 +2509,7 @@ namespace rr
 
 	UInt::UInt(Argument<UInt> argument)
 	{
+		materialize();  // FIXME(b/129757459)
 		storeValue(argument.value);
 	}
 
@@ -3601,6 +3669,7 @@ namespace rr
 
 	Float::Float(Argument<Float> argument)
 	{
+		materialize();  // FIXME(b/129757459)
 		storeValue(argument.value);
 	}
 

@@ -649,6 +649,9 @@ namespace rr
 	void Nucleus::setInsertBlock(BasicBlock *basicBlock)
 	{
 	//	assert(::basicBlock->getInsts().back().getTerminatorEdges().size() >= 0 && "Previous basic block must have a terminator");
+
+		Variable::materializeAll();
+
 		::basicBlock = basicBlock;
 	}
 
@@ -676,24 +679,38 @@ namespace rr
 
 	void Nucleus::createRetVoid()
 	{
+		// Code generated after this point is unreachable, so any variables
+		// being read can safely return an undefined value. We have to avoid
+		// materializing variables after the terminator ret instruction.
+		Variable::killUnmaterialized();
+
 		Ice::InstRet *ret = Ice::InstRet::create(::function);
 		::basicBlock->appendInst(ret);
 	}
 
 	void Nucleus::createRet(Value *v)
 	{
+		// Code generated after this point is unreachable, so any variables
+		// being read can safely return an undefined value. We have to avoid
+		// materializing variables after the terminator ret instruction.
+		Variable::killUnmaterialized();
+
 		Ice::InstRet *ret = Ice::InstRet::create(::function, v);
 		::basicBlock->appendInst(ret);
 	}
 
 	void Nucleus::createBr(BasicBlock *dest)
 	{
+		Variable::materializeAll();
+
 		auto br = Ice::InstBr::create(::function, dest);
 		::basicBlock->appendInst(br);
 	}
 
 	void Nucleus::createCondBr(Value *cond, BasicBlock *ifTrue, BasicBlock *ifFalse)
 	{
+		Variable::materializeAll();
+
 		auto br = Ice::InstBr::create(::function, cond, ifTrue, ifFalse);
 		::basicBlock->appendInst(br);
 	}
@@ -846,8 +863,11 @@ namespace rr
 		}
 	}
 
-	Value *Nucleus::createLoad(Value *ptr, Type *type, bool isVolatile, unsigned int align)
+	Value *Nucleus::createLoad(Value *ptr, Type *type, bool isVolatile, unsigned int align, bool atomic, std::memory_order memoryOrder)
 	{
+		assert(!atomic);  // Unimplemented
+		assert(memoryOrder == std::memory_order_relaxed);  // Unimplemented
+
 		int valueType = (int)reinterpret_cast<intptr_t>(type);
 		Ice::Variable *result = ::function->makeVariable(T(type));
 
@@ -900,8 +920,11 @@ namespace rr
 		return V(result);
 	}
 
-	Value *Nucleus::createStore(Value *value, Value *ptr, Type *type, bool isVolatile, unsigned int align)
+	Value *Nucleus::createStore(Value *value, Value *ptr, Type *type, bool isVolatile, unsigned int align, bool atomic, std::memory_order memoryOrder)
 	{
+		assert(!atomic);  // Unimplemented
+		assert(memoryOrder == std::memory_order_relaxed);  // Unimplemented
+
 		#if __has_feature(memory_sanitizer)
 			// Mark all (non-stack) memory writes as initialized by calling __msan_unpoison
 			if(align != 0)

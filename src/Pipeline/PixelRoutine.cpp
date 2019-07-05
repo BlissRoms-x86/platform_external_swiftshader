@@ -20,6 +20,11 @@
 #include "Device/QuadRasterizer.hpp"
 #include "Device/Primitive.hpp"
 #include "Vulkan/VkDebug.hpp"
+#include "Vulkan/VkPipelineLayout.hpp"
+
+#ifdef Bool
+#undef Bool // b/127920555
+#endif
 
 namespace sw
 {

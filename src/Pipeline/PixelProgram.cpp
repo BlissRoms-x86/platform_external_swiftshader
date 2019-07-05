@@ -31,7 +31,12 @@ namespace sw
 	{
 		enableIndex = 0;
 
-		spirvShader->emit(&routine);
+		routine.descriptorSets = data + OFFSET(DrawData, descriptorSets);
+		routine.descriptorDynamicOffsets = data + OFFSET(DrawData, descriptorDynamicOffsets);
+		routine.pushConstants = data + OFFSET(DrawData, pushConstants);
+
+		auto activeLaneMask = SIMD::Int(0xFFFFFFFF); // TODO: Control this.
+		spirvShader->emit(&routine, activeLaneMask);
 		spirvShader->emitEpilog(&routine);
 
 		for(int i = 0; i < RENDERTARGETS; i++)
@@ -43,6 +48,14 @@ namespace sw
 		}
 
 		clampColor(c);
+
+		if(spirvShader->getModes().ContainsKill)
+		{
+			for (auto i = 0u; i < state.multiSample; i++)
+			{
+				cMask[i] &= ~routine.killMask;
+			}
+		}
 
 		if(spirvShader->getModes().DepthReplacing)
 		{

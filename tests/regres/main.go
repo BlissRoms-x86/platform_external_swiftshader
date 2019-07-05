@@ -31,6 +31,7 @@ import (
 	"flag"
 	"fmt"
 	"log"
+	"math/rand"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -57,7 +58,7 @@ const (
 	dataVersion             = 1
 	changeUpdateFrequency   = time.Minute * 5
 	changeQueryFrequency    = time.Minute * 5
-	testTimeout             = time.Minute * 5  // timeout for a single test
+	testTimeout             = time.Minute * 10 // timeout for a single test
 	buildTimeout            = time.Minute * 10 // timeout for a build
 	dailyUpdateTestListHour = 5                // 5am
 	fullTestListRelPath     = "tests/regres/full-tests.json"
@@ -483,18 +484,20 @@ func (r *regres) postMostCommonFailures(client *gerrit.Client, change *gerrit.Ch
 		if len(lines) == 1 {
 			line := lines[0]
 			if line != "" {
-				sb.WriteString(fmt.Sprintf("  %d occurrences: %v: %v\n", f.count, f.status, line))
+				sb.WriteString(fmt.Sprintf(" • %d occurrences: %v: %v\n", f.count, f.status, line))
 			} else {
-				sb.WriteString(fmt.Sprintf("  %d occurrences: %v\n", f.count, f.status))
+				sb.WriteString(fmt.Sprintf(" • %d occurrences: %v\n", f.count, f.status))
 			}
 		} else {
-			sb.WriteString(fmt.Sprintf("  %d occurrences: %v:\n", f.count, f.status))
+			sb.WriteString(fmt.Sprintf(" • %d occurrences: %v:\n", f.count, f.status))
 			for _, l := range lines {
 				sb.WriteString("    > ")
 				sb.WriteString(l)
 				sb.WriteString("\n")
 			}
 		}
+		sb.WriteString(fmt.Sprintf("    Example test: %v\n", f.exampleTest))
+
 	}
 	msg := sb.String()
 
@@ -650,7 +653,6 @@ func (r *regres) newTest(commit git.Hash) *test {
 		commit:   commit,
 		srcDir:   srcDir,
 		resDir:   resDir,
-		outDir:   filepath.Join(srcDir, "out"),
 		buildDir: filepath.Join(srcDir, "build"),
 	}
 }
@@ -660,7 +662,6 @@ type test struct {
 	commit        git.Hash // hash of the commit to test
 	srcDir        string   // directory for the SwiftShader checkout
 	resDir        string   // directory for the test results
-	outDir        string   // directory for SwiftShader output
 	buildDir      string   // directory for SwiftShader build
 	keepCheckouts bool     // don't delete source & build checkouts after testing
 }
@@ -733,6 +734,16 @@ func (t *test) build() error {
 // run runs all the tests.
 func (t *test) run(testLists testlist.Lists) (*CommitTestResults, error) {
 	log.Printf("Running tests for '%s'\n", t.commit)
+
+	outDir := filepath.Join(t.srcDir, "out")
+	if !isDir(outDir) { // https://swiftshader-review.googlesource.com/c/SwiftShader/+/27188
+		outDir = t.buildDir
+	}
+	if !isDir(outDir) {
+		return nil, fmt.Errorf("Couldn't find output directory")
+	}
+	log.Println("outDir:", outDir)
+
 	start := time.Now()
 
 	// Wait group that completes once all the tests have finished.
@@ -768,13 +779,20 @@ func (t *test) run(testLists testlist.Lists) (*CommitTestResults, error) {
 		wg.Add(numParallelTests)
 		for i := 0; i < numParallelTests; i++ {
 			go func() {
-				t.deqpTestRoutine(exe, tests, results)
+				t.deqpTestRoutine(exe, outDir, tests, results)
 				wg.Done()
 			}()
 		}
 
+		// Shuffle the test list.
+		// This attempts to mix heavy-load tests with lighter ones.
+		shuffled := make([]string, len(list.Tests))
+		for i, j := range rand.New(rand.NewSource(42)).Perm(len(list.Tests)) {
+			shuffled[i] = list.Tests[j]
+		}
+
 		// Hand the tests to the deqpTestRoutines.
-		for _, t := range list.Tests {
+		for _, t := range shuffled {
 			tests <- t
 		}
 
@@ -907,20 +925,27 @@ type testStatusAndError struct {
 type commonFailure struct {
 	count int
 	testStatusAndError
+	exampleTest string
 }
 
 func (r *CommitTestResults) commonFailures() []commonFailure {
 	failures := map[testStatusAndError]int{}
-	for _, test := range r.Tests {
+	examples := map[testStatusAndError]string{}
+	for name, test := range r.Tests {
 		if !test.Status.Failing() {
 			continue
 		}
 		key := testStatusAndError{test.Status, test.Err}
-		failures[key] = failures[key] + 1
+		if count, ok := failures[key]; ok {
+			failures[key] = count + 1
+		} else {
+			failures[key] = 1
+			examples[key] = name
+		}
 	}
 	out := make([]commonFailure, 0, len(failures))
 	for failure, count := range failures {
-		out = append(out, commonFailure{count, failure})
+		out = append(out, commonFailure{count, failure, examples[failure]})
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].count > out[j].count })
 	return out
@@ -989,8 +1014,15 @@ func compare(old, new *CommitTestResults) string {
 				} else {
 					sb.WriteString(fmt.Sprintf(" - [%s]", n.Status))
 				}
+				sb.WriteString("\n")
+				for _, line := range strings.Split(n.Err, "\n") {
+					if line != "" {
+						sb.WriteString(fmt.Sprintf("     %v\n", line))
+					}
+				}
+			} else {
+				sb.WriteString("\n")
 			}
-			sb.WriteString("\n")
 		}
 	}
 
@@ -1099,18 +1131,24 @@ var (
 // is written to results.
 // deqpTestRoutine only returns once the tests chan has been closed.
 // deqpTestRoutine does not close the results chan.
-func (t *test) deqpTestRoutine(exe string, tests <-chan string, results chan<- TestResult) {
+func (t *test) deqpTestRoutine(exe, outDir string, tests <-chan string, results chan<- TestResult) {
 nextTest:
 	for name := range tests {
 		// log.Printf("Running test '%s'\n", name)
 		env := []string{
 			"LD_LIBRARY_PATH=" + t.buildDir + ":" + os.Getenv("LD_LIBRARY_PATH"),
-			"VK_ICD_FILENAMES=" + filepath.Join(t.outDir, "Linux", "vk_swiftshader_icd.json"),
+			"VK_ICD_FILENAMES=" + filepath.Join(outDir, "Linux", "vk_swiftshader_icd.json"),
 			"DISPLAY=" + os.Getenv("DISPLAY"),
 			"LIBC_FATAL_STDERR_=1", // Put libc explosions into logs.
 		}
 
-		outRaw, err := shell.Exec(testTimeout, exe, filepath.Dir(exe), env, "--deqp-surface-type=pbuffer", "-n="+name)
+		outRaw, err := shell.Exec(testTimeout, exe, filepath.Dir(exe), env,
+			"--deqp-surface-type=pbuffer",
+			"--deqp-shadercache=disable",
+			"--deqp-log-images=disable",
+			"--deqp-log-shader-sources=disable",
+			"--deqp-log-flush=disable",
+			"-n="+name)
 		out := string(outRaw)
 		out = strings.ReplaceAll(out, t.srcDir, "<SwiftShader>")
 		out = strings.ReplaceAll(out, exe, "<dEQP>")

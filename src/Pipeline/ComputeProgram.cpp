@@ -45,12 +45,9 @@ namespace sw
 
 	void ComputeProgram::emit()
 	{
-		Pointer<Pointer<Byte>> descriptorSetsIn = *Pointer<Pointer<Pointer<Byte>>>(data + OFFSET(Data, descriptorSets));
-		size_t numDescriptorSets = routine.pipelineLayout->getNumDescriptorSets();
-		for(unsigned int i = 0; i < numDescriptorSets; i++)
-		{
-			routine.descriptorSets[i] = descriptorSetsIn[i];
-		}
+		routine.descriptorSets = data + OFFSET(Data, descriptorSets);
+		routine.descriptorDynamicOffsets = data + OFFSET(Data, descriptorDynamicOffsets);
+		routine.pushConstants = data + OFFSET(Data, pushConstants);
 
 		auto &modes = shader->getModes();
 
@@ -72,6 +69,15 @@ namespace sw
 			{
 				value[builtin.FirstComponent + component] =
 					As<SIMD::Float>(SIMD::Int(Extract(numWorkgroups, component)));
+			}
+		});
+
+		setInputBuiltin(spv::BuiltInWorkgroupId, [&](const SpirvShader::BuiltinMapping& builtin, Array<SIMD::Float>& value)
+		{
+			for (uint32_t component = 0; component < builtin.SizeInComponents; component++)
+			{
+				value[builtin.FirstComponent + component] =
+						As<SIMD::Float>(SIMD::Int(Extract(workgroupID, component)));
 			}
 		});
 
@@ -108,7 +114,7 @@ namespace sw
 			auto localInvocationIndex = SIMD::Int(subgroupIndex * SIMD::Width) + SIMD::Int(0, 1, 2, 3);
 
 			// Disable lanes where (invocationIDs >= numInvocations)
-			routine.activeLaneMask = CmpLT(localInvocationIndex, SIMD::Int(numInvocations));
+			auto activeLaneMask = CmpLT(localInvocationIndex, SIMD::Int(numInvocations));
 
 			SIMD::Int localInvocationID[3];
 			{
@@ -151,7 +157,7 @@ namespace sw
 			});
 
 			// Process numLanes of the workgroup.
-			shader->emit(&routine);
+			shader->emit(&routine, activeLaneMask);
 		}
 	}
 
@@ -161,23 +167,27 @@ namespace sw
 		if (it != shader->inputBuiltins.end())
 		{
 			const auto& builtin = it->second;
-			auto &value = routine.getValue(builtin.Id);
-			cb(builtin, value);
+			cb(builtin, routine.getVariable(builtin.Id));
 		}
 	}
 
 	void ComputeProgram::run(
-		Routine *routine, void** descriptorSets,
+		Routine *routine,
+		vk::DescriptorSet::Bindings const &descriptorSets,
+		vk::DescriptorSet::DynamicOffsets const &descriptorDynamicOffsets,
+		PushConstantStorage const &pushConstants,
 		uint32_t groupCountX, uint32_t groupCountY, uint32_t groupCountZ)
 	{
 		auto runWorkgroup = (void(*)(void*))(routine->getEntry());
 
 		Data data;
 		data.descriptorSets = descriptorSets;
+		data.descriptorDynamicOffsets = descriptorDynamicOffsets;
 		data.numWorkgroups[X] = groupCountX;
 		data.numWorkgroups[Y] = groupCountY;
 		data.numWorkgroups[Z] = groupCountZ;
 		data.numWorkgroups[3] = 0;
+		data.pushConstants = pushConstants;
 
 		// TODO(bclayton): Split work across threads.
 		for (uint32_t groupZ = 0; groupZ < groupCountZ; groupZ++)

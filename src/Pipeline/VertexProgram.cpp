@@ -20,6 +20,8 @@
 #include "System/Half.hpp"
 #include "Vulkan/VkDebug.hpp"
 
+#include "Vulkan/VkPipelineLayout.hpp"
+
 namespace sw
 {
 	VertexProgram::VertexProgram(
@@ -40,9 +42,13 @@ namespace sw
 		{
 			// TODO: we could do better here; we know InstanceIndex is uniform across all lanes
 			assert(it->second.SizeInComponents == 1);
-			routine.getValue(it->second.Id)[it->second.FirstComponent] =
+			routine.getVariable(it->second.Id)[it->second.FirstComponent] =
 					As<Float4>(Int4((*Pointer<Int>(data + OFFSET(DrawData, instanceID)))));
 		}
+
+		routine.descriptorSets = data + OFFSET(DrawData, descriptorSets);
+		routine.descriptorDynamicOffsets = data + OFFSET(DrawData, descriptorDynamicOffsets);
+		routine.pushConstants = data + OFFSET(DrawData, pushConstants);
 	}
 
 	VertexProgram::~VertexProgram()
@@ -59,11 +65,12 @@ namespace sw
 		if (it != spirvShader->inputBuiltins.end())
 		{
 			assert(it->second.SizeInComponents == 1);
-			routine.getValue(it->second.Id)[it->second.FirstComponent] =
+			routine.getVariable(it->second.Id)[it->second.FirstComponent] =
 					As<Float4>(Int4(index) + Int4(0, 1, 2, 3));
 		}
 
-		spirvShader->emit(&routine);
+		auto activeLaneMask = SIMD::Int(0xFFFFFFFF); // TODO: Control this.
+		spirvShader->emit(&routine, activeLaneMask);
 
 		if(currentLabel != -1)
 		{
@@ -71,23 +78,6 @@ namespace sw
 		}
 
 		spirvShader->emitEpilog(&routine);
-	}
-
-	RValue<Pointer<Byte>> VertexProgram::uniformAddress(int bufferIndex, unsigned int index)
-	{
-		if(bufferIndex == -1)
-		{
-			return data + OFFSET(DrawData, vs.c[index]);
-		}
-		else
-		{
-			return *Pointer<Pointer<Byte>>(data + OFFSET(DrawData, vs.u[bufferIndex])) + index;
-		}
-	}
-
-	RValue<Pointer<Byte>> VertexProgram::uniformAddress(int bufferIndex, unsigned int index, Int &offset)
-	{
-		return uniformAddress(bufferIndex, index) + offset * sizeof(float4);
 	}
 
 	Int4 VertexProgram::enableMask()

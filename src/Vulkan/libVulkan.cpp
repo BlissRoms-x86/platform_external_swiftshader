@@ -52,6 +52,24 @@
 #include <cstring>
 #include <string>
 
+namespace
+{
+
+bool HasExtensionProperty(const char* extensionName, const VkExtensionProperties* extensionProperties, uint32_t extensionPropertiesCount)
+{
+	for(uint32_t j = 0; j < extensionPropertiesCount; ++j)
+	{
+		if(strcmp(extensionName, extensionProperties[j].extensionName) == 0)
+		{
+			return true;
+		}
+	}
+
+	return false;
+}
+
+}
+
 extern "C"
 {
 VKAPI_ATTR PFN_vkVoidFunction VKAPI_CALL vk_icdGetInstanceProcAddr(VkInstance instance, const char* pName)
@@ -74,7 +92,9 @@ static const VkExtensionProperties instanceExtensionProperties[] =
 	{ VK_KHR_EXTERNAL_MEMORY_CAPABILITIES_EXTENSION_NAME, VK_KHR_EXTERNAL_MEMORY_CAPABILITIES_SPEC_VERSION },
 	{ VK_KHR_EXTERNAL_SEMAPHORE_CAPABILITIES_EXTENSION_NAME, VK_KHR_EXTERNAL_SEMAPHORE_CAPABILITIES_SPEC_VERSION },
 	{ VK_KHR_GET_PHYSICAL_DEVICE_PROPERTIES_2_EXTENSION_NAME, VK_KHR_GET_PHYSICAL_DEVICE_PROPERTIES_2_SPEC_VERSION },
+#ifndef __ANDROID__
 	{ VK_KHR_SURFACE_EXTENSION_NAME, VK_KHR_SURFACE_SPEC_VERSION },
+#endif
 #ifdef VK_USE_PLATFORM_XLIB_KHR
 	{ VK_KHR_XLIB_SURFACE_EXTENSION_NAME, VK_KHR_XLIB_SURFACE_SPEC_VERSION },
 #endif
@@ -100,7 +120,9 @@ static const VkExtensionProperties deviceExtensionProperties[] =
 	{ VK_KHR_SHADER_DRAW_PARAMETERS_EXTENSION_NAME, VK_KHR_SHADER_DRAW_PARAMETERS_SPEC_VERSION },
 	{ VK_KHR_STORAGE_BUFFER_STORAGE_CLASS_EXTENSION_NAME, VK_KHR_STORAGE_BUFFER_STORAGE_CLASS_SPEC_VERSION },
 	{ VK_KHR_VARIABLE_POINTERS_EXTENSION_NAME, VK_KHR_VARIABLE_POINTERS_SPEC_VERSION },
+#ifndef __ANDROID__
 	{ VK_KHR_SWAPCHAIN_EXTENSION_NAME, VK_KHR_SWAPCHAIN_SPEC_VERSION },
+#endif
 };
 
 VKAPI_ATTR VkResult VKAPI_CALL vkCreateInstance(const VkInstanceCreateInfo* pCreateInfo, const VkAllocationCallbacks* pAllocator, VkInstance* pInstance)
@@ -113,22 +135,10 @@ VKAPI_ATTR VkResult VKAPI_CALL vkCreateInstance(const VkInstanceCreateInfo* pCre
 		UNIMPLEMENTED("pCreateInfo->enabledLayerCount");
 	}
 
+	uint32_t extensionPropertiesCount = sizeof(instanceExtensionProperties) / sizeof(instanceExtensionProperties[0]);
 	for (uint32_t i = 0; i < pCreateInfo->enabledExtensionCount; ++i)
 	{
-		const char* currentExtensionName = pCreateInfo->ppEnabledExtensionNames[i];
-		uint32_t extensionPropertiesCount = sizeof(instanceExtensionProperties) / sizeof(instanceExtensionProperties[0]);
-		bool foundExtension = false;
-
-		for (uint32_t j = 0; j < extensionPropertiesCount; ++j)
-		{
-			if (strcmp(currentExtensionName, instanceExtensionProperties[j].extensionName) == 0)
-			{
-				foundExtension = true;
-				break;
-			}
-		}
-
-		if (!foundExtension)
+		if (!HasExtensionProperty(pCreateInfo->ppEnabledExtensionNames[i], instanceExtensionProperties, extensionPropertiesCount))
 		{
 			return VK_ERROR_EXTENSION_NOT_PRESENT;
 		}
@@ -296,28 +306,14 @@ VKAPI_ATTR VkResult VKAPI_CALL vkCreateDevice(VkPhysicalDevice physicalDevice, c
 		UNIMPLEMENTED("pCreateInfo->enabledLayerCount");   // TODO(b/119321052): UNIMPLEMENTED() should be used only for features that must still be implemented. Use a more informational macro here.
 	}
 
-
+	uint32_t extensionPropertiesCount = sizeof(deviceExtensionProperties) / sizeof(deviceExtensionProperties[0]);
 	for (uint32_t i = 0; i < pCreateInfo->enabledExtensionCount; ++i)
 	{
-		const char* currentExtensionName = pCreateInfo->ppEnabledExtensionNames[i];
-		uint32_t extensionPropertiesCount = sizeof(deviceExtensionProperties) / sizeof(deviceExtensionProperties[0]);
-		bool foundExtension = false;
-
-		for (uint32_t j = 0; j < extensionPropertiesCount; ++j)
-		{
-			if (strcmp(currentExtensionName, deviceExtensionProperties[j].extensionName) == 0)
-			{
-				foundExtension = true;
-				break;
-			}
-		}
-
-		if (!foundExtension)
+		if (!HasExtensionProperty(pCreateInfo->ppEnabledExtensionNames[i], deviceExtensionProperties, extensionPropertiesCount))
 		{
 			return VK_ERROR_EXTENSION_NOT_PRESENT;
 		}
 	}
-
 
 	const VkBaseInStructure* extensionCreateInfo = reinterpret_cast<const VkBaseInStructure*>(pCreateInfo->pNext);
 
@@ -936,9 +932,41 @@ VKAPI_ATTR VkResult VKAPI_CALL vkCreateImageView(VkDevice device, const VkImageV
 	TRACE("(VkDevice device = 0x%X, const VkImageViewCreateInfo* pCreateInfo = 0x%X, const VkAllocationCallbacks* pAllocator = 0x%X, VkImageView* pView = 0x%X)",
 		    device, pCreateInfo, pAllocator, pView);
 
-	if(pCreateInfo->pNext || pCreateInfo->flags)
+	if(pCreateInfo->flags)
 	{
-		UNIMPLEMENTED("pCreateInfo->pNext || pCreateInfo->flags");
+		UNIMPLEMENTED("pCreateInfo->flags");
+	}
+
+	const VkBaseInStructure* extensionCreateInfo = reinterpret_cast<const VkBaseInStructure*>(pCreateInfo->pNext);
+
+	while(extensionCreateInfo)
+	{
+		switch(extensionCreateInfo->sType)
+		{
+		case VK_STRUCTURE_TYPE_IMAGE_VIEW_USAGE_CREATE_INFO_KHR:
+		{
+			const VkImageViewUsageCreateInfo* multiviewCreateInfo = reinterpret_cast<const VkImageViewUsageCreateInfo*>(extensionCreateInfo);
+			ASSERT(!(~vk::Cast(pCreateInfo->image)->getUsage() & multiviewCreateInfo->usage));
+		}
+		break;
+		case VK_STRUCTURE_TYPE_SAMPLER_YCBCR_CONVERSION_INFO:
+		{
+			const VkSamplerYcbcrConversionInfo* ycbcrConversionInfo = reinterpret_cast<const VkSamplerYcbcrConversionInfo*>(extensionCreateInfo);
+			if(ycbcrConversionInfo->conversion != VK_NULL_HANDLE)
+			{
+				ASSERT((pCreateInfo->components.r == VK_COMPONENT_SWIZZLE_IDENTITY) &&
+				       (pCreateInfo->components.g == VK_COMPONENT_SWIZZLE_IDENTITY) &&
+				       (pCreateInfo->components.b == VK_COMPONENT_SWIZZLE_IDENTITY) &&
+				       (pCreateInfo->components.a == VK_COMPONENT_SWIZZLE_IDENTITY));
+			}
+		}
+		break;
+		default:
+			UNIMPLEMENTED("extensionCreateInfo->sType");
+			break;
+		}
+
+		extensionCreateInfo = extensionCreateInfo->pNext;
 	}
 
 	return vk::ImageView::Create(pAllocator, pCreateInfo, pView);
@@ -1236,9 +1264,91 @@ VKAPI_ATTR VkResult VKAPI_CALL vkCreateRenderPass(VkDevice device, const VkRende
 	TRACE("(VkDevice device = 0x%X, const VkRenderPassCreateInfo* pCreateInfo = 0x%X, const VkAllocationCallbacks* pAllocator = 0x%X, VkRenderPass* pRenderPass = 0x%X)",
 		    device, pCreateInfo, pAllocator, pRenderPass);
 
-	if(pCreateInfo->pNext || pCreateInfo->flags)
+	if(pCreateInfo->flags)
 	{
-		UNIMPLEMENTED("pCreateInfo->pNext || pCreateInfo->flags");
+		UNIMPLEMENTED("pCreateInfo->flags");
+	}
+
+	const VkBaseInStructure* extensionCreateInfo = reinterpret_cast<const VkBaseInStructure*>(pCreateInfo->pNext);
+
+	while(extensionCreateInfo)
+	{
+		switch(extensionCreateInfo->sType)
+		{
+		case VK_STRUCTURE_TYPE_RENDER_PASS_INPUT_ATTACHMENT_ASPECT_CREATE_INFO:
+		{
+			const VkRenderPassInputAttachmentAspectCreateInfo* inputAttachmentAspectCreateInfo = reinterpret_cast<const VkRenderPassInputAttachmentAspectCreateInfo*>(extensionCreateInfo);
+
+			for(uint32_t i = 0; i < inputAttachmentAspectCreateInfo->aspectReferenceCount; i++)
+			{
+				const VkInputAttachmentAspectReference& aspectReference = inputAttachmentAspectCreateInfo->pAspectReferences[i];
+				ASSERT(aspectReference.subpass < pCreateInfo->subpassCount);
+				const VkSubpassDescription& subpassDescription = pCreateInfo->pSubpasses[aspectReference.subpass];
+				ASSERT(aspectReference.inputAttachmentIndex < subpassDescription.inputAttachmentCount);
+				const VkAttachmentReference& attachmentReference = subpassDescription.pInputAttachments[aspectReference.inputAttachmentIndex];
+				if(attachmentReference.attachment != VK_ATTACHMENT_UNUSED)
+				{
+					// If the pNext chain includes an instance of VkRenderPassInputAttachmentAspectCreateInfo, for any
+					// element of the pInputAttachments member of any element of pSubpasses where the attachment member
+					// is not VK_ATTACHMENT_UNUSED, the aspectMask member of the corresponding element of
+					// VkRenderPassInputAttachmentAspectCreateInfo::pAspectReferences must only include aspects that are
+					// present in images of the format specified by the element of pAttachments at attachment
+					vk::Format format(pCreateInfo->pAttachments[attachmentReference.attachment].format);
+					bool isDepth = format.isDepth();
+					bool isStencil = format.isStencil();
+					ASSERT(!(aspectReference.aspectMask & VK_IMAGE_ASPECT_COLOR_BIT) || (!isDepth && !isStencil));
+					ASSERT(!(aspectReference.aspectMask & VK_IMAGE_ASPECT_DEPTH_BIT) || isDepth);
+					ASSERT(!(aspectReference.aspectMask & VK_IMAGE_ASPECT_STENCIL_BIT) || isStencil);
+				}
+			}
+		}
+		break;
+		case VK_STRUCTURE_TYPE_RENDER_PASS_MULTIVIEW_CREATE_INFO:
+		{
+			const VkRenderPassMultiviewCreateInfo* multiviewCreateInfo = reinterpret_cast<const VkRenderPassMultiviewCreateInfo*>(extensionCreateInfo);
+			ASSERT((multiviewCreateInfo->subpassCount == 0) || (multiviewCreateInfo->subpassCount == pCreateInfo->subpassCount));
+			ASSERT((multiviewCreateInfo->dependencyCount == 0) || (multiviewCreateInfo->dependencyCount == pCreateInfo->dependencyCount));
+
+			bool zeroMask = (multiviewCreateInfo->pViewMasks[0] == 0);
+			for(uint32_t i = 1; i < multiviewCreateInfo->subpassCount; i++)
+			{
+				ASSERT((multiviewCreateInfo->pViewMasks[i] == 0) == zeroMask);
+			}
+
+			if(zeroMask)
+			{
+				ASSERT(multiviewCreateInfo->correlationMaskCount == 0);
+			}
+
+			for(uint32_t i = 0; i < multiviewCreateInfo->dependencyCount; i++)
+			{
+				const VkSubpassDependency &dependency = pCreateInfo->pDependencies[i];
+				if(multiviewCreateInfo->pViewOffsets[i] != 0)
+				{
+					ASSERT(dependency.srcSubpass != dependency.dstSubpass);
+					ASSERT(dependency.dependencyFlags & VK_DEPENDENCY_VIEW_LOCAL_BIT);
+				}
+				if(zeroMask)
+				{
+					ASSERT(!(dependency.dependencyFlags & VK_DEPENDENCY_VIEW_LOCAL_BIT));
+				}
+			}
+
+			// If the pNext chain includes an instance of VkRenderPassMultiviewCreateInfo,
+			// each element of its pViewMask member must not include a bit at a position
+			// greater than the value of VkPhysicalDeviceLimits::maxFramebufferLayers
+			// pViewMask is a 32 bit value. If maxFramebufferLayers > 32, it's impossible
+			// for pViewMask to contain a bit at an illegal position
+			// Note: Verify pViewMask values instead if we hit this assert
+			ASSERT(vk::Cast(vk::Cast(device)->getPhysicalDevice())->getProperties().limits.maxFramebufferLayers >= 32);
+		}
+		break;
+		default:
+			UNIMPLEMENTED("extensionCreateInfo->sType");
+			break;
+		}
+
+		extensionCreateInfo = extensionCreateInfo->pNext;
 	}
 
 	return vk::RenderPass::Create(pAllocator, pCreateInfo, pRenderPass);
@@ -1930,6 +2040,11 @@ VKAPI_ATTR void VKAPI_CALL vkGetPhysicalDeviceProperties2(VkPhysicalDevice physi
 				vk::Cast(physicalDevice)->getProperties(&properties);
 			}
 			break;
+		case VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SAMPLE_LOCATIONS_PROPERTIES_EXT:
+			// Explicitly ignored, since VK_EXT_sample_locations is not supported
+			ASSERT(!HasExtensionProperty(VK_EXT_SAMPLE_LOCATIONS_EXTENSION_NAME, deviceExtensionProperties,
+			                             sizeof(deviceExtensionProperties) / sizeof(deviceExtensionProperties[0])));
+			break;
 		default:
 			// "the [driver] must skip over, without processing (other than reading the sType and pNext members) any structures in the chain with sType values not defined by [supported extenions]"
 			UNIMPLEMENTED("extensionProperties->sType");   // TODO(b/119321052): UNIMPLEMENTED() should be used only for features that must still be implemented. Use a more informational macro here.
@@ -2122,14 +2237,6 @@ VKAPI_ATTR void VKAPI_CALL vkGetDescriptorSetLayoutSupport(VkDevice device, cons
 	vk::Cast(device)->getDescriptorSetLayoutSupport(pCreateInfo, pSupport);
 }
 
-VKAPI_ATTR void VKAPI_CALL vkDestroySurfaceKHR(VkInstance instance, VkSurfaceKHR surface, const VkAllocationCallbacks* pAllocator)
-{
-    TRACE("(VkInstance instance = 0x%X, VkSurfaceKHR surface = 0x%X, const VkAllocationCallbacks* pAllocator = 0x%X)",
-            instance, surface, pAllocator);
-
-    vk::destroy(surface, pAllocator);
-}
-
 #ifdef VK_USE_PLATFORM_XLIB_KHR
 VKAPI_ATTR VkResult VKAPI_CALL vkCreateXlibSurfaceKHR(VkInstance instance, const VkXlibSurfaceCreateInfoKHR* pCreateInfo, const VkAllocationCallbacks* pAllocator, VkSurfaceKHR* pSurface)
 {
@@ -2139,6 +2246,15 @@ VKAPI_ATTR VkResult VKAPI_CALL vkCreateXlibSurfaceKHR(VkInstance instance, const
 	return vk::XlibSurfaceKHR::Create(pAllocator, pCreateInfo, pSurface);
 }
 #endif
+
+#ifndef __ANDROID__
+VKAPI_ATTR void VKAPI_CALL vkDestroySurfaceKHR(VkInstance instance, VkSurfaceKHR surface, const VkAllocationCallbacks* pAllocator)
+{
+    TRACE("(VkInstance instance = 0x%X, VkSurfaceKHR surface = 0x%X, const VkAllocationCallbacks* pAllocator = 0x%X)",
+            instance, surface, pAllocator);
+
+    vk::destroy(surface, pAllocator);
+}
 
 VKAPI_ATTR VkResult VKAPI_CALL vkGetPhysicalDeviceSurfaceSupportKHR(VkPhysicalDevice physicalDevice, uint32_t queueFamilyIndex, VkSurfaceKHR surface, VkBool32* pSupported)
 {
@@ -2261,5 +2377,6 @@ VKAPI_ATTR VkResult VKAPI_CALL vkQueuePresentKHR(VkQueue queue, const VkPresentI
 
 	return VK_SUCCESS;
 }
+#endif    // ! __ANDROID__
 
 }

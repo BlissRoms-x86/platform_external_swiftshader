@@ -25,40 +25,6 @@
 namespace
 {
 
-sw::DrawType Convert(VkPrimitiveTopology topology)
-{
-	switch(topology)
-	{
-	case VK_PRIMITIVE_TOPOLOGY_POINT_LIST:
-		return sw::DRAW_POINTLIST;
-	case VK_PRIMITIVE_TOPOLOGY_LINE_LIST:
-		return sw::DRAW_LINELIST;
-	case VK_PRIMITIVE_TOPOLOGY_LINE_STRIP:
-		return sw::DRAW_LINESTRIP;
-	case VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST:
-		return sw::DRAW_TRIANGLELIST;
-	case VK_PRIMITIVE_TOPOLOGY_TRIANGLE_STRIP:
-		return sw::DRAW_TRIANGLESTRIP;
-	case VK_PRIMITIVE_TOPOLOGY_TRIANGLE_FAN:
-		return sw::DRAW_TRIANGLEFAN;
-	case VK_PRIMITIVE_TOPOLOGY_LINE_LIST_WITH_ADJACENCY:
-	case VK_PRIMITIVE_TOPOLOGY_LINE_STRIP_WITH_ADJACENCY:
-	case VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST_WITH_ADJACENCY:
-	case VK_PRIMITIVE_TOPOLOGY_TRIANGLE_STRIP_WITH_ADJACENCY:
-		// geometry shader specific
-		ASSERT(false);
-		break;
-	case VK_PRIMITIVE_TOPOLOGY_PATCH_LIST:
-		// tesselation shader specific
-		ASSERT(false);
-		break;
-	default:
-		UNIMPLEMENTED("topology");
-	}
-
-	return sw::DRAW_TRIANGLELIST;
-}
-
 sw::StreamType getStreamType(VkFormat format)
 {
 	switch(format)
@@ -228,15 +194,24 @@ std::vector<uint32_t> preprocessSpirv(
 	opt.RegisterPass(spvtools::CreateFreezeSpecConstantValuePass());
 	opt.RegisterPass(spvtools::CreateFoldSpecConstantOpAndCompositePass());
 
+	// Basic optimization passes to primarily address glslang's love of loads &
+	// stores. Significantly reduces time spent in LLVM passes and codegen.
+	opt.RegisterPass(spvtools::CreateLocalAccessChainConvertPass());
+	opt.RegisterPass(spvtools::CreateLocalSingleBlockLoadStoreElimPass());
+	opt.RegisterPass(spvtools::CreateLocalSingleStoreElimPass());
+	opt.RegisterPass(spvtools::CreateBlockMergePass());
+	opt.RegisterPass(spvtools::CreateLocalMultiStoreElimPass());
+	opt.RegisterPass(spvtools::CreateSSARewritePass());
+
 	std::vector<uint32_t> optimized;
 	opt.Run(code.data(), code.size(), &optimized);
 
 	if (false) {
 		spvtools::SpirvTools core(SPV_ENV_VULKAN_1_1);
 		std::string preOpt;
-		core.Disassemble(code, &preOpt);
+		core.Disassemble(code, &preOpt, SPV_BINARY_TO_TEXT_OPTION_NONE);
 		std::string postOpt;
-		core.Disassemble(optimized, &postOpt);
+		core.Disassemble(optimized, &postOpt, SPV_BINARY_TO_TEXT_OPTION_NONE);
 		std::cout << "PRE-OPT: " << preOpt << std::endl
 		 		<< "POST-OPT: " << postOpt << std::endl;
 	}
@@ -254,13 +229,10 @@ Pipeline::Pipeline(PipelineLayout const *layout) : layout(layout) {}
 GraphicsPipeline::GraphicsPipeline(const VkGraphicsPipelineCreateInfo* pCreateInfo, void* mem)
 	: Pipeline(Cast(pCreateInfo->layout))
 {
-	if((pCreateInfo->flags != 0) ||
+	if(((pCreateInfo->flags & ~(VK_PIPELINE_CREATE_DERIVATIVE_BIT | VK_PIPELINE_CREATE_ALLOW_DERIVATIVES_BIT)) != 0) ||
 	   (pCreateInfo->stageCount != 2) ||
 	   (pCreateInfo->pTessellationState != nullptr) ||
-	   (pCreateInfo->pDynamicState != nullptr) ||
-	   (pCreateInfo->subpass != 0) ||
-	   (pCreateInfo->basePipelineHandle != VK_NULL_HANDLE) ||
-	   (pCreateInfo->basePipelineIndex != 0))
+	   (pCreateInfo->pDynamicState != nullptr))
 	{
 		UNIMPLEMENTED("pCreateInfo settings");
 	}
@@ -276,15 +248,13 @@ GraphicsPipeline::GraphicsPipeline(const VkGraphicsPipelineCreateInfo* pCreateIn
 
 	// Temporary in-binding-order representation of buffer strides, to be consumed below
 	// when considering attributes. TODO: unfuse buffers from attributes in backend, is old GL model.
-	uint32_t bufferStrides[MAX_VERTEX_INPUT_BINDINGS];
+	uint32_t vertexStrides[MAX_VERTEX_INPUT_BINDINGS];
+	uint32_t instanceStrides[MAX_VERTEX_INPUT_BINDINGS];
 	for(uint32_t i = 0; i < vertexInputState->vertexBindingDescriptionCount; i++)
 	{
 		auto const & desc = vertexInputState->pVertexBindingDescriptions[i];
-		bufferStrides[desc.binding] = desc.stride;
-		if(desc.inputRate != VK_VERTEX_INPUT_RATE_VERTEX)
-		{
-			UNIMPLEMENTED("vertexInputState->pVertexBindingDescriptions[%d]", i);
-		}
+		vertexStrides[desc.binding] = desc.inputRate == VK_VERTEX_INPUT_RATE_VERTEX ? desc.stride : 0;
+		instanceStrides[desc.binding] = desc.inputRate == VK_VERTEX_INPUT_RATE_INSTANCE ? desc.stride : 0;
 	}
 
 	for(uint32_t i = 0; i < vertexInputState->vertexAttributeDescriptionCount; i++)
@@ -293,10 +263,11 @@ GraphicsPipeline::GraphicsPipeline(const VkGraphicsPipelineCreateInfo* pCreateIn
 		sw::Stream& input = context.input[desc.location];
 		input.count = getNumberOfChannels(desc.format);
 		input.type = getStreamType(desc.format);
-		input.normalized = !sw::Surface::isNonNormalizedInteger(desc.format);
+		input.normalized = !vk::Format(desc.format).isNonNormalizedInteger();
 		input.offset = desc.offset;
 		input.binding = desc.binding;
-		input.stride = bufferStrides[desc.binding];
+		input.vertexStride = vertexStrides[desc.binding];
+		input.instanceStride = instanceStrides[desc.binding];
 	}
 
 	const VkPipelineInputAssemblyStateCreateInfo* assemblyState = pCreateInfo->pInputAssemblyState;
@@ -306,7 +277,7 @@ GraphicsPipeline::GraphicsPipeline(const VkGraphicsPipelineCreateInfo* pCreateIn
 		UNIMPLEMENTED("pCreateInfo->pInputAssemblyState settings");
 	}
 
-	context.drawType = Convert(assemblyState->topology);
+	context.topology = assemblyState->topology;
 
 	const VkPipelineViewportStateCreateInfo* viewportState = pCreateInfo->pViewportState;
 	if(viewportState)
@@ -468,22 +439,22 @@ void GraphicsPipeline::compileShaders(const VkAllocationCallbacks* pAllocator, c
 
 uint32_t GraphicsPipeline::computePrimitiveCount(uint32_t vertexCount) const
 {
-	switch(context.drawType)
+	switch(context.topology)
 	{
-	case sw::DRAW_POINTLIST:
+	case VK_PRIMITIVE_TOPOLOGY_POINT_LIST:
 		return vertexCount;
-	case sw::DRAW_LINELIST:
+	case VK_PRIMITIVE_TOPOLOGY_LINE_LIST:
 		return vertexCount / 2;
-	case sw::DRAW_LINESTRIP:
+	case VK_PRIMITIVE_TOPOLOGY_LINE_STRIP:
 		return vertexCount - 1;
-	case sw::DRAW_TRIANGLELIST:
+	case VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST:
 		return vertexCount / 3;
-	case sw::DRAW_TRIANGLESTRIP:
+	case VK_PRIMITIVE_TOPOLOGY_TRIANGLE_STRIP:
 		return vertexCount - 2;
-	case sw::DRAW_TRIANGLEFAN:
+	case VK_PRIMITIVE_TOPOLOGY_TRIANGLE_FAN:
 		return vertexCount - 2;
 	default:
-		UNIMPLEMENTED("drawType");
+		UNIMPLEMENTED("context.topology %d", int(context.topology));
 	}
 
 	return 0;
@@ -546,11 +517,13 @@ void ComputePipeline::compileShaders(const VkAllocationCallbacks* pAllocator, co
 }
 
 void ComputePipeline::run(uint32_t groupCountX, uint32_t groupCountY, uint32_t groupCountZ,
-	size_t numDescriptorSets, VkDescriptorSet *descriptorSets)
+	vk::DescriptorSet::Bindings const &descriptorSets,
+	vk::DescriptorSet::DynamicOffsets const &descriptorDynamicOffsets,
+	sw::PushConstantStorage const &pushConstants)
 {
 	ASSERT_OR_RETURN(routine != nullptr);
 	sw::ComputeProgram::run(
-		routine, reinterpret_cast<void**>(descriptorSets),
+		routine, descriptorSets, descriptorDynamicOffsets, pushConstants,
 		groupCountX, groupCountY, groupCountZ);
 }
 

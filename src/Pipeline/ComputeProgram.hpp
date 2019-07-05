@@ -18,6 +18,8 @@
 #include "SpirvShader.hpp"
 
 #include "Reactor/Reactor.hpp"
+#include "Device/Context.hpp"
+#include "Vulkan/VkDescriptorSet.hpp"
 
 #include <functional>
 
@@ -47,7 +49,10 @@ namespace sw
 		// run executes the compute shader routine for all workgroups.
 		// TODO(bclayton): This probably does not belong here. Consider moving.
 		static void run(
-			Routine *routine, void** descriptorSets,
+			Routine *routine,
+			vk::DescriptorSet::Bindings const &descriptorSetBindings,
+			vk::DescriptorSet::DynamicOffsets const &descriptorDynamicOffsets,
+			PushConstantStorage const &pushConstants,
 			uint32_t groupCountX, uint32_t groupCountY, uint32_t groupCountZ);
 
 	protected:
@@ -59,9 +64,11 @@ namespace sw
 
 		struct Data
 		{
-			void** descriptorSets;
+			vk::DescriptorSet::Bindings descriptorSets;
+			vk::DescriptorSet::DynamicOffsets descriptorDynamicOffsets;
 			uint4 numWorkgroups;
 			uint4 workgroupID;
+			PushConstantStorage pushConstants;
 		};
 
 		SpirvRoutine routine;
