@@ -95,11 +95,11 @@ namespace sw
 
 		if(index < 8)   // ps_1_x constants
 		{
-			// FIXME: Compact into generic function
-			short x = iround(4095 * clamp(value[0], -1.0f, 1.0f));
-			short y = iround(4095 * clamp(value[1], -1.0f, 1.0f));
-			short z = iround(4095 * clamp(value[2], -1.0f, 1.0f));
-			short w = iround(4095 * clamp(value[3], -1.0f, 1.0f));
+			// TODO: Compact into generic function
+			short x = iround(4095 * clamp_s(value[0], -1.0f, 1.0f));
+			short y = iround(4095 * clamp_s(value[1], -1.0f, 1.0f));
+			short z = iround(4095 * clamp_s(value[2], -1.0f, 1.0f));
+			short w = iround(4095 * clamp_s(value[3], -1.0f, 1.0f));
 
 			cW[index][0][0] = x;
 			cW[index][0][1] = x;
@@ -586,9 +586,10 @@ namespace sw
 		context->alphaTestEnable = alphaTestEnable;
 	}
 
-	void PixelProcessor::setCullMode(CullMode cullMode)
+	void PixelProcessor::setCullMode(CullMode cullMode, bool frontFacingCCW)
 	{
 		context->cullMode = cullMode;
+		context->frontFacingCCW = frontFacingCCW;
 	}
 
 	void PixelProcessor::setColorWriteMask(int index, int rgbaMask)
@@ -932,7 +933,7 @@ namespace sw
 	void PixelProcessor::setRoutineCacheSize(int cacheSize)
 	{
 		delete routineCache;
-		routineCache = new RoutineCache<State>(clamp(cacheSize, 1, 65536), precachePixel ? "sw-pixel" : 0);
+		routineCache = new RoutineCache<State>(clamp(cacheSize, 1, 65536));
 	}
 
 	void PixelProcessor::setFogRanges(float start, float end)
@@ -1040,6 +1041,8 @@ namespace sw
 		{
 			state.centroid = context->pixelShader->containsCentroid();
 		}
+
+		state.frontFaceCCW = context->frontFacingCCW;
 
 		if(!context->pixelShader)
 		{
@@ -1198,7 +1201,7 @@ namespace sw
 			}
 
 			generator->generate();
-			routine = (*generator)(L"PixelRoutine_%0.8X", state.shaderID);
+			routine = (*generator)("PixelRoutine_%0.8X", state.shaderID);
 			delete generator;
 
 			routineCache->add(state, routine);

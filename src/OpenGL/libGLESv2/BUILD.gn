@@ -48,9 +48,15 @@ config("swiftshader_libGLESv2_private_config") {
     defines += [
       "__STDC_CONSTANT_MACROS",
       "__STDC_LIMIT_MACROS",
-      "GL_APICALL=__attribute__((visibility(\"default\"))) __attribute__((no_sanitize(\"function\")))",
       "GLAPI=GL_APICALL",
     ]
+
+    if (is_mac) {
+      cflags += [ "-fvisibility=protected" ]
+      defines += [ "GL_APICALL=__attribute__((no_sanitize(\"function\")))" ]
+    } else {
+      defines += [ "GL_APICALL=__attribute__((visibility(\"protected\"))) __attribute__((no_sanitize(\"function\")))" ]
+    }
   }
 }
 
@@ -62,6 +68,7 @@ swiftshader_static_library("swiftshader_libGLESv2_static") {
   ]
 
   sources = [
+    "../../Common/SharedLibrary.cpp",
     "Buffer.cpp",
     "Context.cpp",
     "Device.cpp",
@@ -83,6 +90,13 @@ swiftshader_static_library("swiftshader_libGLESv2_static") {
     "resource.h",
     "utilities.cpp",
   ]
+
+  if (is_mac) {
+    libs = [
+      "CoreFoundation.framework",
+      "IOSurface.framework",
+    ]
+  }
 
   configs = [ ":swiftshader_libGLESv2_private_config" ]
 
@@ -109,17 +123,11 @@ swiftshader_shared_library("swiftshader_libGLESv2") {
     "libGLESv2.rc",
   ]
 
-  if (is_win) {
-    ldflags = [ "/DEF:" + rebase_path("libGLESv2.def", root_build_dir) ]
-  } else if (is_mac) {
-    libs = [
-      "CoreFoundation.framework",
-      "IOSurface.framework",
-    ]
+  if (is_mac) {
     ldflags = [ "-Wl,-install_name,@rpath/libswiftshader_libGLESv2.dylib" ]
   } else if (is_linux) {
-    ldflags =
-        [ "-Wl,--version-script=" + rebase_path("libGLESv2.lds", root_build_dir) ]
+    ldflags = [ "-Wl,--version-script=" +
+                rebase_path("libGLESv2.lds", root_build_dir) ]
   }
 
   configs = [ ":swiftshader_libGLESv2_private_config" ]

@@ -17,8 +17,16 @@
 #include "common/debug.h"
 
 #ifdef  __ANDROID__
+#if !defined(ANDROID_NDK_BUILD)
 #include <utils/String8.h>
+#if ANDROID_PLATFORM_SDK_VERSION < 27
 #include <cutils/log.h>
+#elif ANDROID_PLATFORM_SDK_VERSION >= 27
+#include <log/log.h>
+#else
+#error "ANDROID_PLATFORM_SDK_VERSION is not defined"
+#endif
+#endif
 #endif
 
 #include <stdio.h>
@@ -26,8 +34,8 @@
 
 namespace es
 {
-#ifdef __ANDROID__
-	void output(const char *format, va_list vararg)
+#if defined(__ANDROID__) && !defined(ANDROID_HOST_BUILD) && !defined(ANDROID_NDK_BUILD)
+	static void output(const char *format, va_list vararg)
 	{
 		ALOGI("%s", android::String8::formatV(format, vararg).string());
 	}
@@ -45,6 +53,7 @@ namespace es
 			if(file)
 			{
 				vfprintf(file, format, vararg);
+			//	fflush(file);
 			}
 		}
 	}

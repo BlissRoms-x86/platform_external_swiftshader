@@ -292,13 +292,33 @@ void TargetX8664::_unlink_bp() {
   }
 }
 
-void TargetX8664::_push_reg(Variable *Reg) {
-  Variable *rbp =
-      getPhysicalRegister(Traits::RegisterSet::Reg_rbp, Traits::WordType);
-  if (Reg != rbp || !NeedSandboxing) {
-    _push(Reg);
+void TargetX8664::_push_reg(RegNumT RegNum) {
+  if (Traits::isXmm(RegNum)) {
+    Variable *reg =
+        getPhysicalRegister(RegNum, IceType_v4f32);
+    Variable *rsp =
+        getPhysicalRegister(Traits::RegisterSet::Reg_rsp, Traits::WordType);
+    auto* address = Traits::X86OperandMem::create(Func, reg->getType(), rsp, nullptr);
+    _sub_sp(Ctx->getConstantInt32(16)); // TODO(capn): accumulate all the offsets and adjust the stack pointer once.
+    _storep(reg, address);
+  } else if (RegNum != Traits::RegisterSet::Reg_rbp || !NeedSandboxing) {
+    _push(getPhysicalRegister(RegNum, Traits::WordType));
   } else {
     _push_rbp();
+  }
+}
+
+void TargetX8664::_pop_reg(RegNumT RegNum) {
+  if (Traits::isXmm(RegNum)) {
+    Variable *reg =
+        getPhysicalRegister(RegNum, IceType_v4f32);
+    Variable *rsp =
+        getPhysicalRegister(Traits::RegisterSet::Reg_rsp, Traits::WordType);
+    auto* address = Traits::X86OperandMem::create(Func, reg->getType(), rsp, nullptr);
+    _movp(reg, address);
+    _add_sp(Ctx->getConstantInt32(16)); // TODO(capn): accumulate all the offsets and adjust the stack pointer once.
+  } else {
+    _pop(getPhysicalRegister(RegNum, Traits::WordType));
   }
 }
 
@@ -685,11 +705,18 @@ Inst *TargetX8664::emitCallToTarget(Operand *CallTarget, Variable *ReturnReg) {
 
     Context.insert(ReturnAddress);
   } else {
-    if (CallTargetR != nullptr) {
-      // x86-64 in Subzero is ILP32. Therefore, CallTarget is i32, but the
-      // emitted call needs a i64 register (for textual asm.)
+    if (CallTargetR != nullptr && CallTarget->getType() == IceType_i32) {
+      // x86-64 in PNaCl is ILP32. Therefore, CallTarget is i32, but the
+      // emitted call needs an i64 register (for textual asm.)
       Variable *T = makeReg(IceType_i64);
       _movzx(T, CallTargetR);
+      CallTarget = T;
+    } else if (llvm::isa<Constant>(CallTarget) &&
+               CallTarget->getType() == IceType_i64) {
+      // x86-64 does not support 64-bit direct calls, so write the value
+      // to a register and make an indirect call.
+      Variable *T = makeReg(IceType_i64);
+      _mov(T, CallTarget);
       CallTarget = T;
     }
     NewCall = Context.insert<Traits::Insts::Call>(ReturnReg, CallTarget);

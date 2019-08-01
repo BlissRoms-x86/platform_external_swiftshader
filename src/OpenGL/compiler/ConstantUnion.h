@@ -15,15 +15,15 @@
 #ifndef _CONSTANT_UNION_INCLUDED_
 #define _CONSTANT_UNION_INCLUDED_
 
-#ifndef __ANDROID__
-#include <assert.h>
-#else
+#if defined(__ANDROID__) && !defined(ANDROID_HOST_BUILD) && !defined(ANDROID_NDK_BUILD)
 #include "../../Common/DebugAndroid.hpp"
+#else
+#include <assert.h>
 #endif
 
 class ConstantUnion {
 public:
-	POOL_ALLOCATOR_NEW_DELETE();
+	POOL_ALLOCATOR_NEW_DELETE()
 	ConstantUnion()
 	{
 		iConst = 0;

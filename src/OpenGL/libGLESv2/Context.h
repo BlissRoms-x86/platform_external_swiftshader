@@ -105,6 +105,7 @@ enum
 	MAX_UNIFORM_BUFFER_BINDINGS = sw::MAX_UNIFORM_BUFFER_BINDINGS,
 	UNIFORM_BUFFER_OFFSET_ALIGNMENT = 4,
 	NUM_PROGRAM_BINARY_FORMATS = 0,
+	MAX_SHADER_CALL_STACK_SIZE = sw::MAX_SHADER_CALL_STACK_SIZE,
 };
 
 const GLenum compressedTextureFormats[] =
@@ -430,7 +431,7 @@ struct State
 class [[clang::lto_visibility_public]] Context : public egl::Context
 {
 public:
-	Context(egl::Display *display, const Context *shareContext, EGLint clientVersion, const egl::Config *config);
+	Context(egl::Display *display, const Context *shareContext, const egl::Config *config);
 
 	void makeCurrent(gl::Surface *surface) override;
 	EGLint getClientVersion() const override;
@@ -639,6 +640,7 @@ public:
 	GLenum getPixels(const GLvoid **data, GLenum type, GLsizei imageSize) const;
 	bool getBuffer(GLenum target, es2::Buffer **buffer) const;
 	Program *getCurrentProgram() const;
+	Texture *getTargetTexture(GLenum target) const;
 	Texture2D *getTexture2D() const;
 	Texture2D *getTexture2D(GLenum target) const;
 	Texture3D *getTexture3D() const;
@@ -699,6 +701,7 @@ public:
 	Device *getDevice();
 
 	const GLubyte *getExtensions(GLuint index, GLuint *numExt = nullptr) const;
+	sw::MutexLock *getResourceLock() { return mResourceManager->getLock(); }
 
 private:
 	~Context() override;
@@ -725,7 +728,6 @@ private:
 
 	Query *createQuery(GLuint handle, GLenum type);
 
-	const EGLint clientVersion;
 	const egl::Config *const config;
 
 	State mState;
@@ -770,6 +772,31 @@ private:
 	Device *device;
 	ResourceManager *mResourceManager;
 };
+
+// ptr to a context, which also holds the context's resource manager's lock.
+class ContextPtr {
+public:
+	explicit ContextPtr(Context *context) : ptr(context)
+	{
+		if (ptr) { ptr->getResourceLock()->lock(); }
+	}
+
+	~ContextPtr() {
+		if (ptr) { ptr->getResourceLock()->unlock(); }
+	}
+
+	ContextPtr(ContextPtr const &) = delete;
+	ContextPtr & operator=(ContextPtr const &) = delete;
+	ContextPtr(ContextPtr && other) : ptr(other.ptr) { other.ptr = nullptr; }
+	ContextPtr & operator=(ContextPtr && other) { ptr = other.ptr; other.ptr = nullptr; return *this; }
+
+	Context *operator ->() { return ptr; }
+	operator bool() const { return ptr != nullptr; }
+
+private:
+	Context *ptr;
+};
+
 }
 
 #endif   // INCLUDE_CONTEXT_H_

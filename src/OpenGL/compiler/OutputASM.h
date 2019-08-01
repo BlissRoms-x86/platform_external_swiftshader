@@ -144,12 +144,12 @@ namespace glsl
 	struct Attribute
 	{
 		Attribute();
-		Attribute(GLenum type, const std::string &name, int arraySize, int location, int registerIndex);
+		Attribute(GLenum type, const std::string &name, int arraySize, int layoutLocation, int registerIndex);
 
 		GLenum type;
 		std::string name;
 		int arraySize;
-		int location;
+		int layoutLocation;
 
 		int registerIndex;
 	};
@@ -183,7 +183,7 @@ namespace glsl
 	{
 		friend class OutputASM;
 	public:
-		virtual ~Shader() {};
+		virtual ~Shader() {}
 		virtual sw::Shader *getShader() const = 0;
 		virtual sw::PixelShader *getPixelShader() const;
 		virtual sw::VertexShader *getVertexShader() const;

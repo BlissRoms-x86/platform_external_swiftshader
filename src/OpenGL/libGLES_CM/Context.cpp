@@ -1781,14 +1781,15 @@ bool Context::applyRenderTarget()
 void Context::applyState(GLenum drawMode)
 {
 	Framebuffer *framebuffer = getFramebuffer();
+	bool frontFaceCCW = (mState.frontFace == GL_CCW);
 
 	if(mState.cullFaceEnabled)
 	{
-		device->setCullMode(es2sw::ConvertCullMode(mState.cullMode, mState.frontFace));
+		device->setCullMode(es2sw::ConvertCullMode(mState.cullMode, mState.frontFace), frontFaceCCW);
 	}
 	else
 	{
-		device->setCullMode(sw::CULL_NONE);
+		device->setCullMode(sw::CULL_NONE, frontFaceCCW);
 	}
 
 	if(mDepthStateDirty)
@@ -2509,10 +2510,10 @@ void Context::readPixels(GLint x, GLint y, GLsizei width, GLsizei height,
 		{
 			for(int i = 0; i < rect.x1 - rect.x0; i++)
 			{
-				float r;
-				float g;
-				float b;
-				float a;
+				float r = 0.f;
+				float g = 0.f;
+				float b = 0.f;
+				float a = 0.f;
 
 				switch(renderTarget->getExternalFormat())
 				{

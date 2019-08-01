@@ -21,7 +21,7 @@
 #include "common/debug.h"
 
 #include <EGL/eglext.h>
-#ifdef __ANDROID__
+#if defined(__ANDROID__) && !defined(ANDROID_NDK_BUILD)
 #include <system/graphics.h>
 #endif
 
@@ -29,6 +29,7 @@
 #include <algorithm>
 #include <cstring>
 #include <vector>
+#include <map>
 
 using namespace std;
 
@@ -64,7 +65,7 @@ Config::Config(sw::Format displayFormat, EGLint minInterval, EGLint maxInterval,
 		mBlueSize = 8;
 		mAlphaSize = 8;
 		mBindToTextureRGBA = EGL_TRUE;
-		#ifdef __ANDROID__
+		#if defined(__ANDROID__) && !defined(ANDROID_NDK_BUILD)
 			mNativeVisualID = HAL_PIXEL_FORMAT_BGRA_8888;
 		#else
 			mNativeVisualID = 2;   // Arbitrary; prefer over ABGR
@@ -76,7 +77,7 @@ Config::Config(sw::Format displayFormat, EGLint minInterval, EGLint maxInterval,
 		mBlueSize = 8;
 		mAlphaSize = 8;
 		mBindToTextureRGBA = EGL_TRUE;
-		#ifdef __ANDROID__
+		#if defined(__ANDROID__) && !defined(ANDROID_NDK_BUILD)
 			mNativeVisualID = HAL_PIXEL_FORMAT_RGBA_8888;
 		#endif
 		break;
@@ -85,7 +86,7 @@ Config::Config(sw::Format displayFormat, EGLint minInterval, EGLint maxInterval,
 		mGreenSize = 6;
 		mBlueSize = 5;
 		mAlphaSize = 0;
-		#ifdef __ANDROID__
+		#if defined(__ANDROID__) && !defined(ANDROID_NDK_BUILD)
 			mNativeVisualID = HAL_PIXEL_FORMAT_RGB_565;
 		#endif
 		break;
@@ -95,7 +96,7 @@ Config::Config(sw::Format displayFormat, EGLint minInterval, EGLint maxInterval,
 		mBlueSize = 8;
 		mAlphaSize = 0;
 		mBindToTextureRGB = EGL_TRUE;
-		#ifdef __ANDROID__
+		#if defined(__ANDROID__) && !defined(ANDROID_NDK_BUILD)
 			mNativeVisualID = 0x1FF;   // HAL_PIXEL_FORMAT_BGRX_8888
 		#else
 			mNativeVisualID = 1;   // Arbitrary; prefer over XBGR
@@ -107,7 +108,7 @@ Config::Config(sw::Format displayFormat, EGLint minInterval, EGLint maxInterval,
 		mBlueSize = 8;
 		mAlphaSize = 0;
 		mBindToTextureRGB = EGL_TRUE;
-		#ifdef __ANDROID__
+		#if defined(__ANDROID__) && !defined(ANDROID_NDK_BUILD)
 			mNativeVisualID = HAL_PIXEL_FORMAT_RGBX_8888;
 		#endif
 		break;
@@ -261,16 +262,15 @@ SortConfig::SortConfig(const EGLint *attribList)
 	// not considering components that are 0 or don't-care.
 	for(const EGLint *attr = attribList; attr[0] != EGL_NONE; attr += 2)
 	{
-		if(attr[1] != 0 && attr[1] != EGL_DONT_CARE)
+		// When multiple instances of the same attribute are present, last wins.
+		bool isSpecified = attr[1] && attr[1] != EGL_DONT_CARE;
+		switch(attr[0])
 		{
-			switch(attr[0])
-			{
-			case EGL_RED_SIZE:       mWantRed = true;       break;
-			case EGL_GREEN_SIZE:     mWantGreen = true;     break;
-			case EGL_BLUE_SIZE:      mWantBlue = true;      break;
-			case EGL_ALPHA_SIZE:     mWantAlpha = true;     break;
-			case EGL_LUMINANCE_SIZE: mWantLuminance = true; break;
-			}
+			case EGL_RED_SIZE:       mWantRed = isSpecified;       break;
+			case EGL_GREEN_SIZE:     mWantGreen = isSpecified;     break;
+			case EGL_BLUE_SIZE:      mWantBlue = isSpecified;      break;
+			case EGL_ALPHA_SIZE:     mWantAlpha = isSpecified;     break;
+			case EGL_LUMINANCE_SIZE: mWantLuminance = isSpecified; break;
 		}
 	}
 }
@@ -344,49 +344,60 @@ bool ConfigSet::getConfigs(EGLConfig *configs, const EGLint *attribList, EGLint 
 	vector<const Config*> passed;
 	passed.reserve(mSet.size());
 
+	/* Conformance expects for multiple instances of the same attribute that the
+	 * last instance `wins`. Reduce the attribute list first to comply with
+	 * this.
+	 */
+	/* TODO: C++11: unordered_map would be fine here */
+	map<EGLint, EGLint> attribs;
+	const EGLint *attribute = attribList;
+	while (attribute[0] != EGL_NONE)
+	{
+		attribs[attribute[0]] = attribute[1];
+		attribute += 2;
+	}
+
 	for(Iterator config = mSet.begin(); config != mSet.end(); config++)
 	{
 		bool match = true;
 		bool caveatMatch = (config->mConfigCaveat == EGL_NONE);
-		const EGLint *attribute = attribList;
-
-		while(attribute[0] != EGL_NONE)
+		for (map<EGLint, EGLint>::iterator attribIt = attribs.begin(); attribIt != attribs.end(); attribIt++)
 		{
-			if(attribute[1] != EGL_DONT_CARE)
+			if(attribIt->second != EGL_DONT_CARE)
 			{
-				switch(attribute[0])
+				switch(attribIt->first)
 				{
-				case EGL_BUFFER_SIZE:                match = config->mBufferSize >= attribute[1];                           break;
-				case EGL_ALPHA_SIZE:                 match = config->mAlphaSize >= attribute[1];                            break;
-				case EGL_BLUE_SIZE:                  match = config->mBlueSize >= attribute[1];                             break;
-				case EGL_GREEN_SIZE:                 match = config->mGreenSize >= attribute[1];                            break;
-				case EGL_RED_SIZE:                   match = config->mRedSize >= attribute[1];                              break;
-				case EGL_DEPTH_SIZE:                 match = config->mDepthSize >= attribute[1];                            break;
-				case EGL_STENCIL_SIZE:               match = config->mStencilSize >= attribute[1];                          break;
-				case EGL_CONFIG_CAVEAT:              match = config->mConfigCaveat == (EGLenum)attribute[1];                break;
-				case EGL_CONFIG_ID:                  match = config->mConfigID == attribute[1];                             break;
-				case EGL_LEVEL:                      match = config->mLevel >= attribute[1];                                break;
-				case EGL_NATIVE_RENDERABLE:          match = config->mNativeRenderable == (EGLBoolean)attribute[1];         break;
-				case EGL_NATIVE_VISUAL_TYPE:         match = config->mNativeVisualType == attribute[1];                     break;
-				case EGL_SAMPLES:                    match = config->mSamples >= attribute[1];                              break;
-				case EGL_SAMPLE_BUFFERS:             match = config->mSampleBuffers >= attribute[1];                        break;
-				case EGL_SURFACE_TYPE:               match = (config->mSurfaceType & attribute[1]) == attribute[1];         break;
-				case EGL_TRANSPARENT_TYPE:           match = config->mTransparentType == (EGLenum)attribute[1];             break;
-				case EGL_TRANSPARENT_BLUE_VALUE:     match = config->mTransparentBlueValue == attribute[1];                 break;
-				case EGL_TRANSPARENT_GREEN_VALUE:    match = config->mTransparentGreenValue == attribute[1];                break;
-				case EGL_TRANSPARENT_RED_VALUE:      match = config->mTransparentRedValue == attribute[1];                  break;
-				case EGL_BIND_TO_TEXTURE_RGB:        match = config->mBindToTextureRGB == (EGLBoolean)attribute[1];         break;
-				case EGL_BIND_TO_TEXTURE_RGBA:       match = config->mBindToTextureRGBA == (EGLBoolean)attribute[1];        break;
-				case EGL_MIN_SWAP_INTERVAL:          match = config->mMinSwapInterval == attribute[1];                      break;
-				case EGL_MAX_SWAP_INTERVAL:          match = config->mMaxSwapInterval == attribute[1];                      break;
-				case EGL_LUMINANCE_SIZE:             match = config->mLuminanceSize >= attribute[1];                        break;
-				case EGL_ALPHA_MASK_SIZE:            match = config->mAlphaMaskSize >= attribute[1];                        break;
-				case EGL_COLOR_BUFFER_TYPE:          match = config->mColorBufferType == (EGLenum)attribute[1];             break;
-				case EGL_RENDERABLE_TYPE:            match = (config->mRenderableType & attribute[1]) == attribute[1];      break;
-				case EGL_MATCH_NATIVE_PIXMAP:        match = false; UNIMPLEMENTED();                                        break;
-				case EGL_CONFORMANT:                 match = (config->mConformant & attribute[1]) == attribute[1];          break;
-				case EGL_RECORDABLE_ANDROID:         match = config->mRecordableAndroid == (EGLBoolean)attribute[1];        break;
-				case EGL_FRAMEBUFFER_TARGET_ANDROID: match = config->mFramebufferTargetAndroid == (EGLBoolean)attribute[1]; break;
+				case EGL_BUFFER_SIZE:                match = config->mBufferSize >= attribIt->second;                           break;
+				case EGL_ALPHA_SIZE:                 match = config->mAlphaSize >= attribIt->second;                            break;
+				case EGL_BLUE_SIZE:                  match = config->mBlueSize >= attribIt->second;                             break;
+				case EGL_GREEN_SIZE:                 match = config->mGreenSize >= attribIt->second;                            break;
+				case EGL_RED_SIZE:                   match = config->mRedSize >= attribIt->second;                              break;
+				case EGL_DEPTH_SIZE:                 match = config->mDepthSize >= attribIt->second;                            break;
+				case EGL_STENCIL_SIZE:               match = config->mStencilSize >= attribIt->second;                          break;
+				case EGL_CONFIG_CAVEAT:              match = config->mConfigCaveat == (EGLenum)attribIt->second;                break;
+				case EGL_CONFIG_ID:                  match = config->mConfigID == attribIt->second;                             break;
+				case EGL_LEVEL:                      match = config->mLevel >= attribIt->second;                                break;
+				case EGL_NATIVE_RENDERABLE:          match = config->mNativeRenderable == (EGLBoolean)attribIt->second;         break;
+				case EGL_NATIVE_VISUAL_TYPE:         match = config->mNativeVisualType == attribIt->second;                     break;
+				case EGL_SAMPLES:                    match = config->mSamples >= attribIt->second;                              break;
+				case EGL_SAMPLE_BUFFERS:             match = config->mSampleBuffers >= attribIt->second;                        break;
+				case EGL_SURFACE_TYPE:               match = (config->mSurfaceType & attribIt->second) == attribIt->second;     break;
+				case EGL_TRANSPARENT_TYPE:           match = config->mTransparentType == (EGLenum)attribIt->second;             break;
+				case EGL_TRANSPARENT_BLUE_VALUE:     match = config->mTransparentBlueValue == attribIt->second;                 break;
+				case EGL_TRANSPARENT_GREEN_VALUE:    match = config->mTransparentGreenValue == attribIt->second;                break;
+				case EGL_TRANSPARENT_RED_VALUE:      match = config->mTransparentRedValue == attribIt->second;                  break;
+				case EGL_BIND_TO_TEXTURE_RGB:        match = config->mBindToTextureRGB == (EGLBoolean)attribIt->second;         break;
+				case EGL_BIND_TO_TEXTURE_RGBA:       match = config->mBindToTextureRGBA == (EGLBoolean)attribIt->second;        break;
+				case EGL_MIN_SWAP_INTERVAL:          match = config->mMinSwapInterval == attribIt->second;                      break;
+				case EGL_MAX_SWAP_INTERVAL:          match = config->mMaxSwapInterval == attribIt->second;                      break;
+				case EGL_LUMINANCE_SIZE:             match = config->mLuminanceSize >= attribIt->second;                        break;
+				case EGL_ALPHA_MASK_SIZE:            match = config->mAlphaMaskSize >= attribIt->second;                        break;
+				case EGL_COLOR_BUFFER_TYPE:          match = config->mColorBufferType == (EGLenum)attribIt->second;             break;
+				case EGL_RENDERABLE_TYPE:            match = (config->mRenderableType & attribIt->second) == attribIt->second;  break;
+				case EGL_MATCH_NATIVE_PIXMAP:        match = false; UNIMPLEMENTED();                                            break;
+				case EGL_CONFORMANT:                 match = (config->mConformant & attribIt->second) == attribIt->second;      break;
+				case EGL_RECORDABLE_ANDROID:         match = config->mRecordableAndroid == (EGLBoolean)attribIt->second;        break;
+				case EGL_FRAMEBUFFER_TARGET_ANDROID: match = config->mFramebufferTargetAndroid == (EGLBoolean)attribIt->second; break;
 
 				// Ignored attributes
 				case EGL_MAX_PBUFFER_WIDTH:
@@ -406,12 +417,10 @@ bool ConfigSet::getConfigs(EGLConfig *configs, const EGLint *attribList, EGLint 
 				}
 			}
 
-			if(attribute[0] == EGL_CONFIG_CAVEAT)
+			if(attribIt->first == EGL_CONFIG_CAVEAT)
 			{
 				caveatMatch = match;
 			}
-
-			attribute += 2;
 		}
 
 		if(match && caveatMatch)   // We require the caveats to be NONE or the requested flags

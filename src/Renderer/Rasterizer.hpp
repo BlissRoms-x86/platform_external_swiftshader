@@ -21,11 +21,13 @@
 
 namespace sw
 {
+	using namespace rr;
+
 	class Rasterizer : public Function<Void(Pointer<Byte>, Int, Int, Pointer<Byte>)>
 	{
 	public:
 		Rasterizer() : primitive(Arg<0>()), count(Arg<1>()), cluster(Arg<2>()), data(Arg<3>()) {}
-		virtual ~Rasterizer() {};
+		virtual ~Rasterizer() {}
 
 	protected:
 		Pointer<Byte> primitive;

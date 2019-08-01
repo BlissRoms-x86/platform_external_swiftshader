@@ -2828,7 +2828,7 @@ TLayoutQualifier TParseContext::parseLayoutQualifier(const TString &qualifierTyp
 	return qualifier;
 }
 
-TLayoutQualifier TParseContext::parseLayoutQualifier(const TString &qualifierType, const TSourceLoc& qualifierTypeLine, const TString &intValueString, int intValue, const TSourceLoc& intValueLine)
+TLayoutQualifier TParseContext::parseLayoutQualifier(const TString &qualifierType, const TSourceLoc& qualifierTypeLine, int intValue, const TSourceLoc& intValueLine)
 {
 	TLayoutQualifier qualifier;
 
@@ -2846,7 +2846,7 @@ TLayoutQualifier TParseContext::parseLayoutQualifier(const TString &qualifierTyp
 		// must check that location is non-negative
 		if (intValue < 0)
 		{
-			error(intValueLine, "out of range:", intValueString.c_str(), "location must be non-negative");
+			error(intValueLine, "out of range:", "", "location must be non-negative");
 			recover();
 		}
 		else
@@ -3629,21 +3629,45 @@ TIntermTyped *TParseContext::addFunctionCallOrMethod(TFunction *fnCall, TIntermN
 
 					callNode = aggregate;
 
-					if(fnCandidate->getParamCount() == 2)
+					if(op == EOpClamp)
 					{
+						// Special case for clamp -- try to fold it as min(max(t, minVal), maxVal)
 						TIntermSequence &parameters = paramNode->getAsAggregate()->getSequence();
-						TIntermTyped *left = parameters[0]->getAsTyped();
-						TIntermTyped *right = parameters[1]->getAsTyped();
+						TIntermConstantUnion *valConstant = parameters[0]->getAsTyped()->getAsConstantUnion();
+						TIntermConstantUnion *minConstant = parameters[1]->getAsTyped()->getAsConstantUnion();
+						TIntermConstantUnion *maxConstant = parameters[2]->getAsTyped()->getAsConstantUnion();
 
-						TIntermConstantUnion *leftTempConstant = left->getAsConstantUnion();
-						TIntermConstantUnion *rightTempConstant = right->getAsConstantUnion();
-						if (leftTempConstant && rightTempConstant)
+						if (valConstant && minConstant && maxConstant)
 						{
-							TIntermTyped *typedReturnNode = leftTempConstant->fold(op, rightTempConstant, infoSink());
-
-							if(typedReturnNode)
+							TIntermTyped *typedReturnNode = valConstant->fold(EOpMax, minConstant, infoSink());
+							if (typedReturnNode && typedReturnNode->getAsConstantUnion())
+							{
+								typedReturnNode = maxConstant->fold(EOpMin, typedReturnNode->getAsConstantUnion(), infoSink());
+							}
+							if (typedReturnNode)
 							{
 								callNode = typedReturnNode;
+							}
+						}
+					}
+					else
+					{
+						if(fnCandidate->getParamCount() == 2)
+						{
+							TIntermSequence &parameters = paramNode->getAsAggregate()->getSequence();
+							TIntermTyped *left = parameters[0]->getAsTyped();
+							TIntermTyped *right = parameters[1]->getAsTyped();
+
+							TIntermConstantUnion *leftTempConstant = left->getAsConstantUnion();
+							TIntermConstantUnion *rightTempConstant = right->getAsConstantUnion();
+							if (leftTempConstant && rightTempConstant)
+							{
+								TIntermTyped *typedReturnNode = leftTempConstant->fold(op, rightTempConstant, infoSink());
+
+								if(typedReturnNode)
+								{
+									callNode = typedReturnNode;
+								}
 							}
 						}
 					}

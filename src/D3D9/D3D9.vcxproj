@@ -30,6 +30,7 @@
     <ProjectGuid>{F18D5ABF-CA3A-4B74-BDB2-4A1957C86F18}</ProjectGuid>
     <Keyword>Win32Proj</Keyword>
     <WindowsTargetPlatformVersion>10.0.16299.0</WindowsTargetPlatformVersion>
+    <PreferredToolArchitecture>x64</PreferredToolArchitecture>
   </PropertyGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.Default.props" />
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|Win32'" Label="Configuration">
@@ -149,6 +150,7 @@
       <DebugInformationFormat>ProgramDatabase</DebugInformationFormat>
       <ForcedIncludeFiles>%(ForcedIncludeFiles)</ForcedIncludeFiles>
       <MultiProcessorCompilation>true</MultiProcessorCompilation>
+      <AdditionalOptions>/MP /permissive- %(AdditionalOptions)</AdditionalOptions>
     </ClCompile>
     <Link>
       <AdditionalDependencies>dxguid.lib;WS2_32.lib;comctl32.lib;user32.lib;gdi32.lib;Psapi.lib;Psapi.lib;%(AdditionalDependencies)</AdditionalDependencies>
@@ -162,8 +164,8 @@
       <OutputFile>$(OutDir)d3d9.dll</OutputFile>
     </Link>
     <PostBuildEvent>
-      <Command>mkdir "$(SolutionDir)lib\$(Configuration)_$(Platform)\"
-copy "$(OutDir)d3d9.dll" "$(SolutionDir)lib\$(Configuration)_$(Platform)\"</Command>
+      <Command>mkdir "$(SolutionDir)out\$(Configuration)_$(Platform)\"
+copy "$(OutDir)d3d9.dll" "$(SolutionDir)out\$(Configuration)_$(Platform)\"</Command>
     </PostBuildEvent>
   </ItemDefinitionGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">
@@ -188,6 +190,7 @@ copy "$(OutDir)d3d9.dll" "$(SolutionDir)lib\$(Configuration)_$(Platform)\"</Comm
       <DebugInformationFormat>ProgramDatabase</DebugInformationFormat>
       <ForcedIncludeFiles>%(ForcedIncludeFiles)</ForcedIncludeFiles>
       <MultiProcessorCompilation>true</MultiProcessorCompilation>
+      <AdditionalOptions>/MP /permissive- %(AdditionalOptions)</AdditionalOptions>
     </ClCompile>
     <Link>
       <AdditionalDependencies>dxguid.lib;WS2_32.lib;comctl32.lib;user32.lib;gdi32.lib;Psapi.lib;Psapi.lib;%(AdditionalDependencies)</AdditionalDependencies>
@@ -201,8 +204,8 @@ copy "$(OutDir)d3d9.dll" "$(SolutionDir)lib\$(Configuration)_$(Platform)\"</Comm
       <OutputFile>$(OutDir)d3d9.dll</OutputFile>
     </Link>
     <PostBuildEvent>
-      <Command>mkdir "$(SolutionDir)lib\$(Configuration)_$(Platform)\"
-copy "$(OutDir)d3d9.dll" "$(SolutionDir)lib\$(Configuration)_$(Platform)\"</Command>
+      <Command>mkdir "$(SolutionDir)out\$(Configuration)_$(Platform)\"
+copy "$(OutDir)d3d9.dll" "$(SolutionDir)out\$(Configuration)_$(Platform)\"</Command>
     </PostBuildEvent>
   </ItemDefinitionGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Release|Win32'">
@@ -231,6 +234,7 @@ copy "$(OutDir)d3d9.dll" "$(SolutionDir)lib\$(Configuration)_$(Platform)\"</Comm
       <StringPooling>true</StringPooling>
       <FloatingPointExceptions>false</FloatingPointExceptions>
       <MultiProcessorCompilation>true</MultiProcessorCompilation>
+      <AdditionalOptions>/MP /permissive- %(AdditionalOptions)</AdditionalOptions>
     </ClCompile>
     <Link>
       <AdditionalDependencies>dxguid.lib;WS2_32.lib;comctl32.lib;user32.lib;gdi32.lib;Psapi.lib;Psapi.lib;%(AdditionalDependencies)</AdditionalDependencies>
@@ -247,8 +251,8 @@ copy "$(OutDir)d3d9.dll" "$(SolutionDir)lib\$(Configuration)_$(Platform)\"</Comm
       <OutputFile>$(OutDir)d3d9.dll</OutputFile>
     </Link>
     <PostBuildEvent>
-      <Command>mkdir "$(SolutionDir)lib\$(Configuration)_$(Platform)\"
-copy "$(OutDir)d3d9.dll" "$(SolutionDir)lib\$(Configuration)_$(Platform)\"</Command>
+      <Command>mkdir "$(SolutionDir)out\$(Configuration)_$(Platform)\"
+copy "$(OutDir)d3d9.dll" "$(SolutionDir)out\$(Configuration)_$(Platform)\"</Command>
     </PostBuildEvent>
   </ItemDefinitionGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Profile|Win32'">
@@ -275,6 +279,7 @@ copy "$(OutDir)d3d9.dll" "$(SolutionDir)lib\$(Configuration)_$(Platform)\"</Comm
       <EnableFiberSafeOptimizations>true</EnableFiberSafeOptimizations>
       <StringPooling>true</StringPooling>
       <FloatingPointExceptions>false</FloatingPointExceptions>
+      <AdditionalOptions>/MP /permissive- %(AdditionalOptions)</AdditionalOptions>
     </ClCompile>
     <Link>
       <AdditionalDependencies>dxguid.lib;WS2_32.lib;comctl32.lib;user32.lib;gdi32.lib;Psapi.lib;Psapi.lib;%(AdditionalDependencies)</AdditionalDependencies>
@@ -291,8 +296,8 @@ copy "$(OutDir)d3d9.dll" "$(SolutionDir)lib\$(Configuration)_$(Platform)\"</Comm
       <OutputFile>$(OutDir)d3d9.dll</OutputFile>
     </Link>
     <PostBuildEvent>
-      <Command>mkdir "$(SolutionDir)lib\$(Configuration)_$(Platform)\"
-copy "$(OutDir)d3d9.dll" "$(SolutionDir)lib\$(Configuration)_$(Platform)\"</Command>
+      <Command>mkdir "$(SolutionDir)out\$(Configuration)_$(Platform)\"
+copy "$(OutDir)d3d9.dll" "$(SolutionDir)out\$(Configuration)_$(Platform)\"</Command>
     </PostBuildEvent>
   </ItemDefinitionGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
@@ -300,7 +305,7 @@ copy "$(OutDir)d3d9.dll" "$(SolutionDir)lib\$(Configuration)_$(Platform)\"</Comm
       <TargetEnvironment>X64</TargetEnvironment>
     </Midl>
     <ClCompile>
-      <AdditionalOptions>/MP %(AdditionalOptions)</AdditionalOptions>
+      <AdditionalOptions>/MP /permissive- %(AdditionalOptions)</AdditionalOptions>
       <Optimization>Full</Optimization>
       <InlineFunctionExpansion>AnySuitable</InlineFunctionExpansion>
       <IntrinsicFunctions>false</IntrinsicFunctions>
@@ -341,8 +346,8 @@ copy "$(OutDir)d3d9.dll" "$(SolutionDir)lib\$(Configuration)_$(Platform)\"</Comm
       <OutputFile>$(OutDir)d3d9.dll</OutputFile>
     </Link>
     <PostBuildEvent>
-      <Command>mkdir "$(SolutionDir)lib\$(Configuration)_$(Platform)\"
-copy "$(OutDir)d3d9.dll" "$(SolutionDir)lib\$(Configuration)_$(Platform)\"</Command>
+      <Command>mkdir "$(SolutionDir)out\$(Configuration)_$(Platform)\"
+copy "$(OutDir)d3d9.dll" "$(SolutionDir)out\$(Configuration)_$(Platform)\"</Command>
     </PostBuildEvent>
   </ItemDefinitionGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Profile|x64'">
@@ -350,7 +355,7 @@ copy "$(OutDir)d3d9.dll" "$(SolutionDir)lib\$(Configuration)_$(Platform)\"</Comm
       <TargetEnvironment>X64</TargetEnvironment>
     </Midl>
     <ClCompile>
-      <AdditionalOptions>/MP %(AdditionalOptions)</AdditionalOptions>
+      <AdditionalOptions>/MP /permissive- %(AdditionalOptions)</AdditionalOptions>
       <Optimization>Full</Optimization>
       <InlineFunctionExpansion>AnySuitable</InlineFunctionExpansion>
       <IntrinsicFunctions>false</IntrinsicFunctions>
@@ -389,8 +394,8 @@ copy "$(OutDir)d3d9.dll" "$(SolutionDir)lib\$(Configuration)_$(Platform)\"</Comm
       <OutputFile>$(OutDir)d3d9.dll</OutputFile>
     </Link>
     <PostBuildEvent>
-      <Command>mkdir "$(SolutionDir)lib\$(Configuration)_$(Platform)\"
-copy "$(OutDir)d3d9.dll" "$(SolutionDir)lib\$(Configuration)_$(Platform)\"</Command>
+      <Command>mkdir "$(SolutionDir)out\$(Configuration)_$(Platform)\"
+copy "$(OutDir)d3d9.dll" "$(SolutionDir)out\$(Configuration)_$(Platform)\"</Command>
     </PostBuildEvent>
   </ItemDefinitionGroup>
   <ItemGroup>

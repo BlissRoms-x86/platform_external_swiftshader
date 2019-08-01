@@ -14,13 +14,16 @@
 
 #include "FrameBufferAndroid.hpp"
 
+#ifndef ANDROID_NDK_BUILD
 #include "Common/GrallocAndroid.hpp"
-
 #include <system/window.h>
-#include <cutils/log.h>
+#else
+#include <android/native_window.h>
+#endif
 
 namespace sw
 {
+#if !defined(ANDROID_NDK_BUILD)
 	inline int dequeueBuffer(ANativeWindow* window, ANativeWindowBuffer** buffer)
 	{
 		#if ANDROID_PLATFORM_SDK_VERSION > 16
@@ -47,18 +50,23 @@ namespace sw
 			return window->cancelBuffer(window, buffer);
 		#endif
 	}
+#endif // !defined(ANDROID_NDK_BUILD)
 
 	FrameBufferAndroid::FrameBufferAndroid(ANativeWindow* window, int width, int height)
 		: FrameBuffer(width, height, false, false),
 		  nativeWindow(window), buffer(nullptr)
 	{
+#ifndef ANDROID_NDK_BUILD
 		nativeWindow->common.incRef(&nativeWindow->common);
 		native_window_set_usage(nativeWindow, GRALLOC_USAGE_SW_READ_OFTEN | GRALLOC_USAGE_SW_WRITE_OFTEN);
+#endif
 	}
 
 	FrameBufferAndroid::~FrameBufferAndroid()
 	{
+#ifndef ANDROID_NDK_BUILD
 		nativeWindow->common.decRef(&nativeWindow->common);
+#endif
 	}
 
 	void FrameBufferAndroid::blit(sw::Surface *source, const Rect *sourceRect, const Rect *destRect)
@@ -73,29 +81,63 @@ namespace sw
 				unlock();
 			}
 
+#ifndef ANDROID_NDK_BUILD
 			queueBuffer(nativeWindow, buffer, -1);
+#endif
 		}
 	}
 
 	void *FrameBufferAndroid::lock()
 	{
+
+#if defined(ANDROID_NDK_BUILD)
+		ANativeWindow_Buffer surfaceBuffer;
+		if (ANativeWindow_lock(nativeWindow, &surfaceBuffer, nullptr) != 0) {
+			TRACE("%s failed to lock buffer %p", __FUNCTION__, buffer);
+			return nullptr;
+		}
+		framebuffer = surfaceBuffer.bits;
+
+		if((surfaceBuffer.width < width) || (surfaceBuffer.height < height))
+		{
+			TRACE("lock failed: buffer of %dx%d too small for window of %dx%d",
+			      surfaceBuffer.width, surfaceBuffer.height, width, height);
+			return nullptr;
+		}
+
+		switch(surfaceBuffer.format)
+		{
+		case AHARDWAREBUFFER_FORMAT_R8G8B8A8_UNORM:     format = FORMAT_A8B8G8R8; break;
+		case AHARDWAREBUFFER_FORMAT_R8G8B8X8_UNORM:     format = FORMAT_X8B8G8R8; break;
+		case AHARDWAREBUFFER_FORMAT_R8G8B8_UNORM:
+			// Frame buffers are expected to have 16-bit or 32-bit colors, not 24-bit.
+			TRACE("Unsupported frame buffer format R8G8B8"); ASSERT(false);
+			format = FORMAT_R8G8B8;   // Wrong component order.
+			break;
+		case AHARDWAREBUFFER_FORMAT_R5G6B5_UNORM:       format = FORMAT_R5G6B5; break;
+		default:
+			TRACE("Unsupported frame buffer format %d", surfaceBuffer.format); ASSERT(false);
+			format = FORMAT_NULL;
+			break;
+		}
+		stride = surfaceBuffer.stride * Surface::bytes(format);
+#else // !defined(ANDROID_NDK_BUILD)
 		if(dequeueBuffer(nativeWindow, &buffer) != 0)
 		{
 			return nullptr;
 		}
-
 		if(GrallocModule::getInstance()->lock(buffer->handle,
 		                 GRALLOC_USAGE_SW_READ_OFTEN | GRALLOC_USAGE_SW_WRITE_OFTEN,
 		                 0, 0, buffer->width, buffer->height, &framebuffer) != 0)
 		{
-			ALOGE("%s failed to lock buffer %p", __FUNCTION__, buffer);
+			TRACE("%s failed to lock buffer %p", __FUNCTION__, buffer);
 			return nullptr;
 		}
 
 		if((buffer->width < width) || (buffer->height < height))
 		{
-			ALOGI("lock failed: buffer of %dx%d too small for window of %dx%d",
-				  buffer->width, buffer->height, width, height);
+			TRACE("lock failed: buffer of %dx%d too small for window of %dx%d",
+			      buffer->width, buffer->height, width, height);
 			return nullptr;
 		}
 
@@ -110,16 +152,17 @@ namespace sw
 		case HAL_PIXEL_FORMAT_BGRA_8888: format = FORMAT_A8R8G8B8; break;
 		case HAL_PIXEL_FORMAT_RGB_888:
 			// Frame buffers are expected to have 16-bit or 32-bit colors, not 24-bit.
-			ALOGE("Unsupported frame buffer format RGB_888"); ASSERT(false);
+			TRACE("Unsupported frame buffer format RGB_888"); ASSERT(false);
 			format = FORMAT_R8G8B8;   // Wrong component order.
 			break;
 		default:
-			ALOGE("Unsupported frame buffer format %d", buffer->format); ASSERT(false);
+			TRACE("Unsupported frame buffer format %d", buffer->format); ASSERT(false);
 			format = FORMAT_NULL;
 			break;
 		}
-
 		stride = buffer->stride * Surface::bytes(format);
+#endif // !defined(ANDROID_NDK_BUILD)
+
 		return framebuffer;
 	}
 
@@ -127,16 +170,20 @@ namespace sw
 	{
 		if(!buffer)
 		{
-			ALOGE("%s: badness unlock with no active buffer", __FUNCTION__);
+			TRACE("%s: badness unlock with no active buffer", __FUNCTION__);
 			return;
 		}
 
 		framebuffer = nullptr;
 
+#ifdef ANDROID_NDK_BUILD
+		ANativeWindow_unlockAndPost(nativeWindow);
+#else
 		if(GrallocModule::getInstance()->unlock(buffer->handle) != 0)
 		{
-			ALOGE("%s: badness unlock failed", __FUNCTION__);
+			TRACE("%s: badness unlock failed", __FUNCTION__);
 		}
+#endif
 	}
 }
 

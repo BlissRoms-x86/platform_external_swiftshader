@@ -26,12 +26,15 @@
 #include "common/debug.h"
 #include "Main/FrameBuffer.hpp"
 
-#if defined(__linux__) && !defined(__ANDROID__)
+#if defined(USE_X11)
 #include "Main/libX11.hpp"
 #elif defined(_WIN32)
 #include <tchar.h>
 #elif defined(__APPLE__)
 #include "OSXUtils.hpp"
+#endif
+#if defined(__ANDROID__) && defined(ANDROID_NDK_BUILD)
+#include <android/native_window.h>
 #endif
 
 #include <algorithm>
@@ -339,9 +342,14 @@ bool WindowSurface::checkForResize()
 		int windowWidth = client.right - client.left;
 		int windowHeight = client.bottom - client.top;
 	#elif defined(__ANDROID__)
+	#ifdef ANDROID_NDK_BUILD
+		int windowWidth = ANativeWindow_getWidth(window);
+		int windowHeight = ANativeWindow_getHeight(window);
+	#else
 		int windowWidth;  window->query(window, NATIVE_WINDOW_WIDTH, &windowWidth);
 		int windowHeight; window->query(window, NATIVE_WINDOW_HEIGHT, &windowHeight);
-	#elif defined(__linux__)
+	#endif
+	#elif defined(USE_X11)
 		XWindowAttributes windowAttributes;
 		Status status = libX11->XGetWindowAttributes((::Display*)display->getNativeDisplay(), window, &windowAttributes);
 
@@ -352,6 +360,10 @@ bool WindowSurface::checkForResize()
 
 		int windowWidth = windowAttributes.width;
 		int windowHeight = windowAttributes.height;
+	#elif defined(__linux__)
+		// Non X11 linux is headless only
+		int windowWidth = 100;
+		int windowHeight = 100;
 	#elif defined(__APPLE__)
 		int windowWidth;
 		int windowHeight;

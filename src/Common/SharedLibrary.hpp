@@ -27,32 +27,15 @@ void *getLibraryHandle(const char *path);
 void *loadLibrary(const char *path);
 void freeLibrary(void *library);
 void *getProcAddress(void *library, const char *name);
+std::string getModuleDirectory();
 
 template<int n>
 void *loadLibrary(const std::string &libraryDirectory, const char *(&names)[n], const char *mustContainSymbol = nullptr)
 {
-	if(!libraryDirectory.empty())
+	for(const char *libraryName : names)
 	{
-		for(int i = 0; i < n; i++)
-		{
-			std::string nameWithPath = libraryDirectory + names[i];
-			void *library = getLibraryHandle(nameWithPath.c_str());
-
-			if(library)
-			{
-				if(!mustContainSymbol || getProcAddress(library, mustContainSymbol))
-				{
-					return library;
-				}
-
-				freeLibrary(library);
-			}
-		}
-	}
-
-	for(int i = 0; i < n; i++)
-	{
-		void *library = getLibraryHandle(names[i]);
+		std::string libraryPath = libraryDirectory + libraryName;
+		void *library = getLibraryHandle(libraryPath.c_str());
 
 		if(library)
 		{
@@ -65,9 +48,10 @@ void *loadLibrary(const std::string &libraryDirectory, const char *(&names)[n], 
 		}
 	}
 
-	for(int i = 0; i < n; i++)
+	for(const char *libraryName : names)
 	{
-		void *library = loadLibrary(names[i]);
+		std::string libraryPath = libraryDirectory + libraryName;
+		void *library = loadLibrary(libraryPath.c_str());
 
 		if(library)
 		{
@@ -104,22 +88,6 @@ void *loadLibrary(const std::string &libraryDirectory, const char *(&names)[n], 
 	inline void *getProcAddress(void *library, const char *name)
 	{
 		return (void*)GetProcAddress((HMODULE)library, name);
-	}
-
-	inline std::string getLibraryDirectoryFromSymbol(void* symbol)
-	{
-		HMODULE module = NULL;
-		GetModuleHandleEx(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS, (LPCTSTR)symbol, &module);
-		char filename[1024];
-		if(module && (GetModuleFileName(module, filename, sizeof(filename)) != 0))
-		{
-			std::string directory(filename);
-			return directory.substr(0, directory.find_last_of("\\/") + 1).c_str();
-		}
-		else
-		{
-			return "";
-		}
 	}
 #else
 	inline void *loadLibrary(const char *path)
@@ -163,20 +131,6 @@ void *loadLibrary(const std::string &libraryDirectory, const char *(&names)[n], 
 		}
 
 		return symbol;
-	}
-
-	inline std::string getLibraryDirectoryFromSymbol(void* symbol)
-	{
-		Dl_info dl_info;
-		if(dladdr(symbol, &dl_info) != 0)
-		{
-			std::string directory(dl_info.dli_fname);
-			return directory.substr(0, directory.find_last_of("\\/") + 1).c_str();
-		}
-		else
-		{
-			return "";
-		}
 	}
 #endif
 

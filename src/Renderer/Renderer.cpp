@@ -72,11 +72,50 @@ namespace sw
 	TranscendentalPrecision rsqPrecision = ACCURATE;
 	bool perspectiveCorrection = true;
 
+	static void setGlobalRenderingSettings(Conventions conventions, bool exactColorRounding)
+	{
+		static bool initialized = false;
+
+		if(!initialized)
+		{
+			sw::halfIntegerCoordinates = conventions.halfIntegerCoordinates;
+			sw::symmetricNormalizedDepth = conventions.symmetricNormalizedDepth;
+			sw::booleanFaceRegister = conventions.booleanFaceRegister;
+			sw::fullPixelPositionRegister = conventions.fullPixelPositionRegister;
+			sw::leadingVertexFirst = conventions.leadingVertexFirst;
+			sw::secondaryColor = conventions.secondaryColor;
+			sw::colorsDefaultToZero = conventions.colorsDefaultToZero;
+			sw::exactColorRounding = exactColorRounding;
+			initialized = true;
+		}
+	}
+
 	struct Parameters
 	{
 		Renderer *renderer;
 		int threadIndex;
 	};
+
+	Query::Query(Type type) : building(false), data(0), type(type), reference(1)
+	{
+	}
+
+	void Query::addRef()
+	{
+		++reference; // Atomic
+	}
+
+	void Query::release()
+	{
+		int ref = reference--; // Atomic
+
+		ASSERT(ref >= 0);
+
+		if(ref == 0)
+		{
+			delete this;
+		}
+	}
 
 	DrawCall::DrawCall()
 	{
@@ -105,14 +144,7 @@ namespace sw
 
 	Renderer::Renderer(Context *context, Conventions conventions, bool exactColorRounding) : VertexProcessor(context), PixelProcessor(context), SetupProcessor(context), context(context), viewport()
 	{
-		sw::halfIntegerCoordinates = conventions.halfIntegerCoordinates;
-		sw::symmetricNormalizedDepth = conventions.symmetricNormalizedDepth;
-		sw::booleanFaceRegister = conventions.booleanFaceRegister;
-		sw::fullPixelPositionRegister = conventions.fullPixelPositionRegister;
-		sw::leadingVertexFirst = conventions.leadingVertexFirst;
-		sw::secondaryColor = conventions.secondaryColor;
-		sw::colorsDefaultToZero = conventions.colorsDefaultToZero;
-		sw::exactColorRounding = exactColorRounding;
+		setGlobalRenderingSettings(conventions, exactColorRounding);
 
 		setRenderTarget(0, 0);
 		clipper = new Clipper(symmetricNormalizedDepth);
@@ -177,7 +209,10 @@ namespace sw
 
 	Renderer::~Renderer()
 	{
+		sync->lock(EXCLUSIVE);
 		sync->destruct();
+		terminateThreads();
+		sync->unlock();
 
 		delete clipper;
 		clipper = nullptr;
@@ -185,15 +220,17 @@ namespace sw
 		delete blitter;
 		blitter = nullptr;
 
-		terminateThreads();
 		delete resumeApp;
+		resumeApp = nullptr;
 
 		for(int draw = 0; draw < DRAW_COUNT; draw++)
 		{
 			delete drawCall[draw];
+			drawCall[draw] = nullptr;
 		}
 
 		delete swiftConfig;
+		swiftConfig = nullptr;
 	}
 
 	// This object has to be mem aligned
@@ -314,7 +351,7 @@ namespace sw
 				{
 					if(includePrimitivesWrittenQueries || (query->type != Query::TRANSFORM_FEEDBACK_PRIMITIVES_WRITTEN))
 					{
-						++query->reference; // Atomic
+						query->addRef();
 						draw->queries->push_back(query);
 					}
 				}
@@ -1002,7 +1039,7 @@ namespace sw
 							break;
 						}
 
-						--query->reference; // Atomic
+						query->release();
 					}
 
 					delete draw.queries;
