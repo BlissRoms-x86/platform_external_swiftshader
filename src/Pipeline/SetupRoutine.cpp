@@ -23,8 +23,6 @@
 
 namespace sw
 {
-	extern TranscendentalPrecision logPrecision;
-
 	SetupRoutine::SetupRoutine(const SetupProcessor::State &state) : state(state)
 	{
 		routine = 0;
@@ -36,7 +34,7 @@ namespace sw
 
 	void SetupRoutine::generate()
 	{
-		Function<Bool(Pointer<Byte>, Pointer<Byte>, Pointer<Byte>, Pointer<Byte>)> function;
+		Function<Int(Pointer<Byte>, Pointer<Byte>, Pointer<Byte>, Pointer<Byte>)> function;
 		{
 			Pointer<Byte> primitive(function.Arg<0>());
 			Pointer<Byte> tri(function.Arg<1>());
@@ -85,54 +83,43 @@ namespace sw
 
 				If(A == 0.0f)
 				{
-					Return(false);
+					Return(0);
 				}
 
-				Int w0w1w2 = *Pointer<Int>(v0 + OFFSET(Vertex, builtins.position.w)) ^
-							 *Pointer<Int>(v1 + OFFSET(Vertex, builtins.position.w)) ^
-							 *Pointer<Int>(v2 + OFFSET(Vertex, builtins.position.w));
+				Int w0w1w2 = *Pointer<Int>(v0 + OFFSET(Vertex, position.w)) ^
+							 *Pointer<Int>(v1 + OFFSET(Vertex, position.w)) ^
+							 *Pointer<Int>(v2 + OFFSET(Vertex, position.w));
 
 				A = IfThenElse(w0w1w2 < 0, -A, A);
 
-				Bool frontFacing = state.frontFacingCCW ? A > 0.0f : A < 0.0f;
+				Bool frontFacing = (state.frontFace == VK_FRONT_FACE_COUNTER_CLOCKWISE) ? A > 0.0f : A < 0.0f;
 
 				if(state.cullMode & VK_CULL_MODE_FRONT_BIT)
 				{
-					If(frontFacing) Return(false);
+					If(frontFacing) Return(0);
 				}
 				if(state.cullMode & VK_CULL_MODE_BACK_BIT)
 				{
-					If(!frontFacing) Return(false);
+					If(!frontFacing) Return(0);
 				}
 
 				d = IfThenElse(A > 0.0f, d, Int(0));
 
-				if(state.twoSidedStencil)
-				{
-					If(frontFacing)
-					{
-						*Pointer<Byte8>(primitive + OFFSET(Primitive,clockwiseMask)) = Byte8(0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF);
-						*Pointer<Byte8>(primitive + OFFSET(Primitive,invClockwiseMask)) = Byte8(0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00);
-					}
-					Else
-					{
-						*Pointer<Byte8>(primitive + OFFSET(Primitive,clockwiseMask)) = Byte8(0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00);
-						*Pointer<Byte8>(primitive + OFFSET(Primitive,invClockwiseMask)) = Byte8(0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF);
-					}
-				}
-
-				if(state.vFace)
-				{
-					*Pointer<Float>(primitive + OFFSET(Primitive,area)) = 0.5f * A;
-				}
-			}
-			else
-			{
-				if(state.twoSidedStencil)
+				If(frontFacing)
 				{
 					*Pointer<Byte8>(primitive + OFFSET(Primitive,clockwiseMask)) = Byte8(0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF);
 					*Pointer<Byte8>(primitive + OFFSET(Primitive,invClockwiseMask)) = Byte8(0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00);
 				}
+				Else
+				{
+					*Pointer<Byte8>(primitive + OFFSET(Primitive,clockwiseMask)) = Byte8(0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00);
+					*Pointer<Byte8>(primitive + OFFSET(Primitive,invClockwiseMask)) = Byte8(0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF);
+				}
+			}
+			else
+			{
+				*Pointer<Byte8>(primitive + OFFSET(Primitive,clockwiseMask)) = Byte8(0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF);
+				*Pointer<Byte8>(primitive + OFFSET(Primitive,invClockwiseMask)) = Byte8(0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00);
 			}
 
 			Int n = *Pointer<Int>(polygon + OFFSET(Polygon,n));
@@ -186,13 +173,16 @@ namespace sw
 				yMax = (yMax + 0x0F) >> 4;
 			}
 
-			If(yMin == yMax)
-			{
-				Return(false);
-			}
-
 			yMin = Max(yMin, *Pointer<Int>(data + OFFSET(DrawData,scissorY0)));
 			yMax = Min(yMax, *Pointer<Int>(data + OFFSET(DrawData,scissorY1)));
+
+			// If yMin and yMax are initially negative, the scissor clamping above will typically result
+			// in yMin == 0 and yMax unchanged. We bail as we don't need to rasterize this primitive, and
+			// code below assumes yMin < yMax.
+			If(yMin >= yMax)
+			{
+				Return(0);
+			}
 
 			For(Int q = 0, q < state.multiSample, q++)
 			{
@@ -262,7 +252,7 @@ namespace sw
 
 					If(yMin == yMax)
 					{
-						Return(false);
+						Return(0);
 					}
 
 					*Pointer<Short>(leftEdge + (yMin - 1) * sizeof(Primitive::Span)) = *Pointer<Short>(leftEdge + yMin * sizeof(Primitive::Span));
@@ -278,9 +268,9 @@ namespace sw
 			// Sort by minimum y
 			if(triangle)
 			{
-				Float y0 = *Pointer<Float>(v0 + OFFSET(Vertex, builtins.position.y));
-				Float y1 = *Pointer<Float>(v1 + OFFSET(Vertex, builtins.position.y));
-				Float y2 = *Pointer<Float>(v2 + OFFSET(Vertex, builtins.position.y));
+				Float y0 = *Pointer<Float>(v0 + OFFSET(Vertex, position.y));
+				Float y1 = *Pointer<Float>(v1 + OFFSET(Vertex, position.y));
+				Float y2 = *Pointer<Float>(v2 + OFFSET(Vertex, position.y));
 
 				Float yMin = Min(Min(y0, y1), y2);
 
@@ -291,9 +281,9 @@ namespace sw
 			// Sort by maximum w
 			if(triangle)
 			{
-				Float w0 = *Pointer<Float>(v0 + OFFSET(Vertex, builtins.position.w));
-				Float w1 = *Pointer<Float>(v1 + OFFSET(Vertex, builtins.position.w));
-				Float w2 = *Pointer<Float>(v2 + OFFSET(Vertex, builtins.position.w));
+				Float w0 = *Pointer<Float>(v0 + OFFSET(Vertex, position.w));
+				Float w1 = *Pointer<Float>(v1 + OFFSET(Vertex, position.w));
+				Float w2 = *Pointer<Float>(v2 + OFFSET(Vertex, position.w));
 
 				Float wMax = Max(Max(w0, w1), w2);
 
@@ -301,9 +291,14 @@ namespace sw
 				conditionalRotate2(wMax == w2, v0, v1, v2);
 			}
 
-			Float w0 = *Pointer<Float>(v0 + OFFSET(Vertex, builtins.position.w));
-			Float w1 = *Pointer<Float>(v1 + OFFSET(Vertex, builtins.position.w));
-			Float w2 = *Pointer<Float>(v2 + OFFSET(Vertex, builtins.position.w));
+			*Pointer<Float>(primitive + OFFSET(Primitive, pointCoordX)) =
+				*Pointer<Float>(v0 + OFFSET(Vertex, position.x));
+			*Pointer<Float>(primitive + OFFSET(Primitive, pointCoordY)) =
+				*Pointer<Float>(v0 + OFFSET(Vertex, position.y));
+
+			Float w0 = *Pointer<Float>(v0 + OFFSET(Vertex, position.w));
+			Float w1 = *Pointer<Float>(v1 + OFFSET(Vertex, position.w));
+			Float w2 = *Pointer<Float>(v2 + OFFSET(Vertex, position.w));
 
 			Float4 w012;
 
@@ -447,58 +442,29 @@ namespace sw
 
 			for (int interpolant = 0; interpolant < MAX_INTERFACE_COMPONENTS; interpolant++)
 			{
-				// TODO: fix `perspective` throughout interpolation code to consider NoPerspective-decorated interpolants,
-				// which were not individually-controllable in the GLES implementation.
-				// Note: `sprite` mode controls whether to replace this interpolant with the point sprite PointCoord value.
-				// This was an interesting thing to support for old GL because any texture coordinate could be replaced in this way.
-				// In modern GL and in Vulkan, the [gl_]PointCoord builtin variable to the fragment shader is used instead.
 				if (state.gradient[interpolant].Type != SpirvShader::ATTRIBTYPE_UNUSED)
 					setupGradient(primitive, tri, w012, M, v0, v1, v2,
 							OFFSET(Vertex, v[interpolant]),
 							OFFSET(Primitive, V[interpolant]),
 							state.gradient[interpolant].Flat,
-							false /* is pointcoord */,
-							state.perspective, 0);
+							!state.gradient[interpolant].NoPerspective, 0);
 			}
 
-			Return(true);
+			Return(1);
 		}
 
 		routine = function("SetupRoutine");
 	}
 
-	void SetupRoutine::setupGradient(Pointer<Byte> &primitive, Pointer<Byte> &triangle, Float4 &w012, Float4 (&m)[3], Pointer<Byte> &v0, Pointer<Byte> &v1, Pointer<Byte> &v2, int attribute, int planeEquation, bool flat, bool sprite, bool perspective, int component)
+	void SetupRoutine::setupGradient(Pointer<Byte> &primitive, Pointer<Byte> &triangle, Float4 &w012, Float4 (&m)[3], Pointer<Byte> &v0, Pointer<Byte> &v1, Pointer<Byte> &v2, int attribute, int planeEquation, bool flat, bool perspective, int component)
 	{
-		Float4 i;
-
 		if(!flat)
 		{
-			if(!sprite)
-			{
-				i.x = *Pointer<Float>(v0 + attribute);
-				i.y = *Pointer<Float>(v1 + attribute);
-				i.z = *Pointer<Float>(v2 + attribute);
-				i.w = 0;
-			}
-			else
-			{
-				if(component == 0) i.x = 0.5f;
-				if(component == 1) i.x = 0.5f;
-				if(component == 2) i.x = 0.0f;
-				if(component == 3) i.x = 1.0f;
-
-				if(component == 0) i.y = 1.0f;
-				if(component == 1) i.y = 0.5f;
-				if(component == 2) i.y = 0.0f;
-				if(component == 3) i.y = 1.0f;
-
-				if(component == 0) i.z = 0.5f;
-				if(component == 1) i.z = 1.0f;
-				if(component == 2) i.z = 0.0f;
-				if(component == 3) i.z = 1.0f;
-
-				i.w = 0;
-			}
+			Float4 i;
+			i.x = *Pointer<Float>(v0 + attribute);
+			i.y = *Pointer<Float>(v1 + attribute);
+			i.z = *Pointer<Float>(v2 + attribute);
+			i.w = 0;
 
 			if(!perspective)
 			{
@@ -635,7 +601,7 @@ namespace sw
 		#endif
 	}
 
-	Routine *SetupRoutine::getRoutine()
+	std::shared_ptr<Routine> SetupRoutine::getRoutine()
 	{
 		return routine;
 	}

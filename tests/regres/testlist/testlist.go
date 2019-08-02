@@ -161,6 +161,8 @@ const (
 	Crash = Status("CRASH")
 	// Unimplemented is the status of a test that failed with UNIMPLEMENTED().
 	Unimplemented = Status("UNIMPLEMENTED")
+	// Unsupported is the status of a test that failed with UNSUPPORTED().
+	Unsupported = Status("UNSUPPORTED")
 	// Unreachable is the status of a test that failed with UNREACHABLE().
 	Unreachable = Status("UNREACHABLE")
 	// Assert is the status of a test that failed with ASSERT() or ASSERT_MSG().
@@ -182,6 +184,7 @@ var Statuses = []Status{
 	Timeout,
 	Crash,
 	Unimplemented,
+	Unsupported,
 	Unreachable,
 	Assert,
 	Abort,
@@ -193,7 +196,12 @@ var Statuses = []Status{
 // Failing returns true if the task status requires fixing.
 func (s Status) Failing() bool {
 	switch s {
-	case Fail, Timeout, Crash, Unimplemented, Unreachable, Assert:
+	case Fail, Timeout, Crash, Unimplemented, Unreachable, Assert, Abort:
+		return true
+	case Unsupported:
+		// This may seem surprising that this should be a failure, however these
+		// should not be reached, as dEQP should not be using features that are
+		// not advertised.
 		return true
 	default:
 		return false

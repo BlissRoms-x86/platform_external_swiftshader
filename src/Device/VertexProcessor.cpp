@@ -19,36 +19,29 @@
 #include "System/Math.hpp"
 #include "Vulkan/VkDebug.hpp"
 
-#include <string.h>
+#include <cstring>
 
 namespace sw
 {
-	bool precacheVertex = false;
-
 	void VertexCache::clear()
 	{
-		for(int i = 0; i < 16; i++)
+		for(uint32_t i = 0; i < SIZE; i++)
 		{
-			tag[i] = 0x80000000;
+			tag[i] = 0xFFFFFFFF;
 		}
 	}
 
-	unsigned int VertexProcessor::States::computeHash()
+	uint32_t VertexProcessor::States::computeHash()
 	{
-		unsigned int *state = (unsigned int*)this;
-		unsigned int hash = 0;
+		uint32_t *state = reinterpret_cast<uint32_t*>(this);
+		uint32_t hash = 0;
 
-		for(unsigned int i = 0; i < sizeof(States) / 4; i++)
+		for(unsigned int i = 0; i < sizeof(States) / sizeof(uint32_t); i++)
 		{
 			hash ^= state[i];
 		}
 
 		return hash;
-	}
-
-	VertexProcessor::State::State()
-	{
-		memset(this, 0, sizeof(State));
 	}
 
 	bool VertexProcessor::State::operator==(const State &state) const
@@ -58,10 +51,11 @@ namespace sw
 			return false;
 		}
 
+		static_assert(is_memcmparable<State>::value, "Cannot memcmp States");
 		return memcmp(static_cast<const States*>(this), static_cast<const States*>(&state), sizeof(States)) == 0;
 	}
 
-	VertexProcessor::VertexProcessor(Context *context) : context(context)
+	VertexProcessor::VertexProcessor()
 	{
 		routineCache = nullptr;
 		setRoutineCacheSize(1024);
@@ -73,55 +67,19 @@ namespace sw
 		routineCache = nullptr;
 	}
 
-	void VertexProcessor::setInputStream(int index, const Stream &stream)
-	{
-		context->input[index] = stream;
-	}
-
-	void VertexProcessor::resetInputStreams()
-	{
-		for(int i = 0; i < MAX_VERTEX_INPUTS; i++)
-		{
-			context->input[i].defaults();
-		}
-	}
-
-	void VertexProcessor::setInstanceID(int instanceID)
-	{
-		context->instanceID = instanceID;
-	}
-
 	void VertexProcessor::setRoutineCacheSize(int cacheSize)
 	{
 		delete routineCache;
 		routineCache = new RoutineCache<State>(clamp(cacheSize, 1, 65536));
 	}
 
-	const VertexProcessor::State VertexProcessor::update(VkPrimitiveTopology topology)
+	const VertexProcessor::State VertexProcessor::update(const sw::Context* context)
 	{
 		State state;
 
 		state.shaderID = context->vertexShader->getSerialID();
 
-		switch(topology)
-		{
-		case VK_PRIMITIVE_TOPOLOGY_POINT_LIST:
-			state.verticesPerPrimitive = 1;
-			break;
-		case VK_PRIMITIVE_TOPOLOGY_LINE_LIST:
-		case VK_PRIMITIVE_TOPOLOGY_LINE_STRIP:
-			state.verticesPerPrimitive = 2;
-			break;
-		case VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST:
-		case VK_PRIMITIVE_TOPOLOGY_TRIANGLE_STRIP:
-		case VK_PRIMITIVE_TOPOLOGY_TRIANGLE_FAN:
-			state.verticesPerPrimitive = 3;
-			break;
-		default:
-			UNIMPLEMENTED("topology %d", int(topology));
-		}
-
-		for(int i = 0; i < MAX_VERTEX_INPUTS; i++)
+		for(int i = 0; i < MAX_INTERFACE_COMPONENTS / 4; i++)
 		{
 			state.input[i].type = context->input[i].type;
 			state.input[i].count = context->input[i].count;
@@ -136,13 +94,16 @@ namespace sw
 		return state;
 	}
 
-	Routine *VertexProcessor::routine(const State &state)
+	std::shared_ptr<Routine> VertexProcessor::routine(const State &state,
+	                                                  vk::PipelineLayout const *pipelineLayout,
+	                                                  SpirvShader const *vertexShader,
+	                                                  const vk::DescriptorSet::Bindings &descriptorSets)
 	{
-		Routine *routine = routineCache->query(state);
+		auto routine = routineCache->query(state);
 
 		if(!routine)   // Create one
 		{
-			VertexRoutine *generator = new VertexProgram(state, context->pipelineLayout, context->vertexShader);
+			VertexRoutine *generator = new VertexProgram(state, pipelineLayout, vertexShader, descriptorSets);
 			generator->generate();
 			routine = (*generator)("VertexRoutine_%0.8X", state.shaderID);
 			delete generator;

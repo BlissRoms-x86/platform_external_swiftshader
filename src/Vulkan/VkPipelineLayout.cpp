@@ -25,7 +25,10 @@ PipelineLayout::PipelineLayout(const VkPipelineLayoutCreateInfo* pCreateInfo, vo
 
 	size_t setLayoutsSize = pCreateInfo->setLayoutCount * sizeof(DescriptorSetLayout*);
 	setLayouts = reinterpret_cast<DescriptorSetLayout**>(hostMem);
-	memcpy(setLayouts, pCreateInfo->pSetLayouts, setLayoutsSize); // Assumes Cast(VkDescriptorSetLayout) is nothing but a cast
+	for(uint32_t i = 0; i < pCreateInfo->setLayoutCount; i++)
+	{
+		setLayouts[i] = vk::Cast(pCreateInfo->pSetLayouts[i]);
+	}
 	hostMem += setLayoutsSize;
 
 	size_t pushConstantRangesSize = pCreateInfo->pushConstantRangeCount * sizeof(VkPushConstantRange);
@@ -37,9 +40,10 @@ PipelineLayout::PipelineLayout(const VkPipelineLayoutCreateInfo* pCreateInfo, vo
 	uint32_t dynamicOffsetBase = 0;
 	for (uint32_t i = 0; i < setLayoutCount; i++)
 	{
-		ASSERT_OR_RETURN(dynamicOffsetBase < MAX_DESCRIPTOR_SET_COMBINED_BUFFERS_DYNAMIC);
+		uint32_t dynamicDescriptorCount = setLayouts[i]->getDynamicDescriptorCount();
+		ASSERT_OR_RETURN((dynamicOffsetBase + dynamicDescriptorCount) <= MAX_DESCRIPTOR_SET_COMBINED_BUFFERS_DYNAMIC);
 		dynamicOffsetBases[i] = dynamicOffsetBase;
-		dynamicOffsetBase += setLayouts[i]->getDynamicDescriptorCount();
+		dynamicOffsetBase += dynamicDescriptorCount;
 	}
 }
 

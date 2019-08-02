@@ -51,13 +51,7 @@
     <ClCompile Include="..\Device\Vector.cpp">
       <Filter>Source Files\Device</Filter>
     </ClCompile>
-    <ClCompile Include="..\Device\SwiftConfig.cpp">
-      <Filter>Source Files\Device</Filter>
-    </ClCompile>
     <ClCompile Include="..\Device\SetupProcessor.cpp">
-      <Filter>Source Files\Device</Filter>
-    </ClCompile>
-    <ClCompile Include="..\Device\Sampler.cpp">
       <Filter>Source Files\Device</Filter>
     </ClCompile>
     <ClCompile Include="..\Device\Renderer.cpp">
@@ -153,13 +147,7 @@
     <ClCompile Include="..\System\Memory.cpp">
       <Filter>Source Files\System</Filter>
     </ClCompile>
-    <ClCompile Include="..\System\Resource.cpp">
-      <Filter>Source Files\System</Filter>
-    </ClCompile>
     <ClCompile Include="..\System\Socket.cpp">
-      <Filter>Source Files\System</Filter>
-    </ClCompile>
-    <ClCompile Include="..\System\Thread.cpp">
       <Filter>Source Files\System</Filter>
     </ClCompile>
     <ClCompile Include="..\System\Timer.cpp">
@@ -172,6 +160,9 @@
       <Filter>Source Files\Vulkan</Filter>
     </ClCompile>
     <ClCompile Include="VkBuffer.cpp">
+      <Filter>Source Files\Vulkan</Filter>
+    </ClCompile>
+    <ClCompile Include="VkBufferView.cpp">
       <Filter>Source Files\Vulkan</Filter>
     </ClCompile>
     <ClCompile Include="VkCommandBuffer.cpp">
@@ -225,6 +216,9 @@
     <ClCompile Include="VkPipeline.cpp">
       <Filter>Source Files\Vulkan</Filter>
     </ClCompile>
+    <ClCompile Include="VkPipelineCache.cpp">
+      <Filter>Source Files\Vulkan</Filter>
+    </ClCompile>
     <ClCompile Include="VkPipelineLayout.cpp">
       <Filter>Source Files\Vulkan</Filter>
     </ClCompile>
@@ -240,10 +234,16 @@
     <ClCompile Include="VkRenderPass.cpp">
       <Filter>Source Files\Vulkan</Filter>
     </ClCompile>
+    <ClCompile Include="VkSampler.cpp">
+      <Filter>Source Files\Vulkan</Filter>
+    </ClCompile>
     <ClCompile Include="VkShaderModule.cpp">
       <Filter>Source Files\Vulkan</Filter>
     </ClCompile>
     <ClCompile Include="..\Pipeline\SpirvShader.cpp">
+      <Filter>Source Files\Pipeline</Filter>
+    </ClCompile>
+    <ClCompile Include="..\Pipeline\SpirvShaderSampling.cpp">
       <Filter>Source Files\Pipeline</Filter>
     </ClCompile>
     <ClCompile Include="..\Pipeline\SpirvShader_dbg.cpp">
@@ -357,9 +357,6 @@
       <Filter>Header Files\Device</Filter>
     </ClInclude>
     <ClInclude Include="..\Device\Triangle.hpp">
-      <Filter>Header Files\Device</Filter>
-    </ClInclude>
-    <ClInclude Include="..\Device\SwiftConfig.hpp">
       <Filter>Header Files\Device</Filter>
     </ClInclude>
     <ClInclude Include="..\Device\Stream.hpp">
@@ -482,19 +479,13 @@
     <ClInclude Include="..\System\Memory.hpp">
       <Filter>Header Files\System</Filter>
     </ClInclude>
-    <ClInclude Include="..\System\MutexLock.hpp">
-      <Filter>Header Files\System</Filter>
-    </ClInclude>
-    <ClInclude Include="..\System\Resource.hpp">
-      <Filter>Header Files\System</Filter>
-    </ClInclude>
     <ClInclude Include="..\System\SharedLibrary.hpp">
       <Filter>Header Files\System</Filter>
     </ClInclude>
     <ClInclude Include="..\System\Socket.hpp">
       <Filter>Header Files\System</Filter>
     </ClInclude>
-    <ClInclude Include="..\System\Thread.hpp">
+    <ClInclude Include="..\System\Synchronization.hpp">
       <Filter>Header Files\System</Filter>
     </ClInclude>
     <ClInclude Include="..\System\Timer.hpp">
@@ -507,6 +498,9 @@
       <Filter>Header Files\Vulkan</Filter>
     </ClInclude>
     <ClInclude Include="VkDestroy.h">
+      <Filter>Header Files\Vulkan</Filter>
+    </ClInclude>
+    <ClInclude Include="VulkanPlatform.h">
       <Filter>Header Files\Vulkan</Filter>
     </ClInclude>
     <ClInclude Include="Version.h" />

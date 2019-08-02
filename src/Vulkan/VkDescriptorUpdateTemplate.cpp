@@ -22,7 +22,7 @@ namespace vk
 	DescriptorUpdateTemplate::DescriptorUpdateTemplate(const VkDescriptorUpdateTemplateCreateInfo* pCreateInfo, void* mem) :
 		descriptorUpdateEntryCount(pCreateInfo->descriptorUpdateEntryCount),
 		descriptorUpdateEntries(reinterpret_cast<VkDescriptorUpdateTemplateEntry*>(mem)),
-		descriptorSetLayout(Cast(pCreateInfo->descriptorSetLayout))
+		descriptorSetLayout(vk::Cast(pCreateInfo->descriptorSetLayout))
 	{
 		for(uint32_t i = 0; i < descriptorUpdateEntryCount; i++)
 		{
@@ -35,40 +35,15 @@ namespace vk
 		return info->descriptorUpdateEntryCount * sizeof(VkDescriptorUpdateTemplateEntry);
 	}
 
-	void DescriptorUpdateTemplate::updateDescriptorSet(VkDescriptorSet vkDescriptorSet, const void* pData)
+	void DescriptorUpdateTemplate::updateDescriptorSet(Device* device, VkDescriptorSet vkDescriptorSet, const void* pData)
 	{
+
 		DescriptorSet* descriptorSet = vk::Cast(vkDescriptorSet);
 
 		for(uint32_t i = 0; i < descriptorUpdateEntryCount; i++)
 		{
-			auto const &entry = descriptorUpdateEntries[i];
-			auto binding = entry.dstBinding;
-			auto arrayElement = entry.dstArrayElement;
-			for (uint32_t descriptorIndex = 0; descriptorIndex < entry.descriptorCount; descriptorIndex++)
-			{
-				while (arrayElement == descriptorSetLayout->getBindingLayout(binding).descriptorCount)
-				{
-					// If descriptorCount is greater than the number of remaining
-					// array elements in the destination binding, those affect
-					// consecutive bindings in a manner similar to
-					// VkWriteDescriptorSet.
-					// If a binding has a descriptorCount of zero, it is skipped.
-					arrayElement = 0;
-					binding++;
-				}
-
-				uint8_t *memToRead = (uint8_t *)pData + entry.offset + descriptorIndex * entry.stride;
-				size_t typeSize = 0;
-				uint8_t* memToWrite = descriptorSetLayout->getOffsetPointer(
-					descriptorSet,
-					binding,
-					arrayElement,
-					1, // count
-					&typeSize);
-				memcpy(memToWrite, memToRead, typeSize);
-
-				arrayElement++;
-			}
+			DescriptorSetLayout::WriteDescriptorSet(device, descriptorSet, descriptorUpdateEntries[i],
+													reinterpret_cast<char const *>(pData));
 		}
 	}
 }

@@ -22,10 +22,6 @@
 
 namespace sw
 {
-	extern bool fullPixelPositionRegister;
-
-	extern int clusterCount;
-
 	QuadRasterizer::QuadRasterizer(const PixelProcessor::State &state, SpirvShader const *spirvShader) : state(state), spirvShader{spirvShader}
 	{
 	}
@@ -36,15 +32,6 @@ namespace sw
 
 	void QuadRasterizer::generate()
 	{
-		#if PERF_PROFILE
-			for(int i = 0; i < PERF_TIMERS; i++)
-			{
-				cycles[i] = 0;
-			}
-
-			Long pixelTime = Ticks();
-		#endif
-
 		constants = *Pointer<Pointer<Byte>>(data + OFFSET(DrawData,constants));
 		occlusion = 0;
 		int clusterCount = Renderer::getClusterCount();
@@ -75,15 +62,6 @@ namespace sw
 			clusterOcclusion += occlusion;
 			*Pointer<UInt>(data + OFFSET(DrawData,occlusion) + 4 * cluster) = clusterOcclusion;
 		}
-
-		#if PERF_PROFILE
-			cycles[PERF_PIXEL] = Ticks() - pixelTime;
-
-			for(int i = 0; i < PERF_TIMERS; i++)
-			{
-				*Pointer<Long>(data + OFFSET(DrawData,cycles[i]) + 8 * cluster) += cycles[i];
-			}
-		#endif
 
 		Return();
 	}
@@ -164,15 +142,19 @@ namespace sw
 					Dw = *Pointer<Float4>(primitive + OFFSET(Primitive,w.C), 16) + yyyy * *Pointer<Float4>(primitive + OFFSET(Primitive,w.B), 16);
 				}
 
-				for (int interpolant = 0; interpolant < MAX_INTERFACE_COMPONENTS; interpolant++)
+				if (spirvShader)
 				{
-					if (spirvShader->inputs[interpolant].Type == SpirvShader::ATTRIBTYPE_UNUSED)
-						continue;
-
-					Dv[interpolant] = *Pointer<Float4>(primitive + OFFSET(Primitive, V[interpolant].C), 16);
-					if (!spirvShader->inputs[interpolant].Flat)
+					for (int interpolant = 0; interpolant < MAX_INTERFACE_COMPONENTS; interpolant++)
 					{
-						Dv[interpolant] += yyyy * *Pointer<Float4>(primitive + OFFSET(Primitive, V[interpolant].B), 16);
+						if (spirvShader->inputs[interpolant].Type == SpirvShader::ATTRIBTYPE_UNUSED)
+							continue;
+
+						Dv[interpolant] = *Pointer<Float4>(primitive + OFFSET(Primitive, V[interpolant].C), 16);
+						if (!spirvShader->inputs[interpolant].Flat)
+						{
+							Dv[interpolant] +=
+									yyyy * *Pointer<Float4>(primitive + OFFSET(Primitive, V[interpolant].B), 16);
+						}
 					}
 				}
 
@@ -195,8 +177,15 @@ namespace sw
 
 					for(unsigned int q = 0; q < state.multiSample; q++)
 					{
-						Short4 mask = CmpGT(xxxx, xLeft[q]) & CmpGT(xRight[q], xxxx);
-						cMask[q] = SignMask(PackSigned(mask, mask)) & 0x0000000F;
+						if (state.multiSampleMask & (1<<q))
+						{
+							Short4 mask = CmpGT(xxxx, xLeft[q]) & CmpGT(xRight[q], xxxx);
+							cMask[q] = SignMask(PackSigned(mask, mask)) & 0x0000000F;
+						}
+						else
+						{
+							cMask[q] = 0;
+						}
 					}
 
 					quad(cBuffer, zBuffer, sBuffer, cMask, x, y);
@@ -252,11 +241,13 @@ namespace sw
 
 	bool QuadRasterizer::interpolateZ() const
 	{
-		return state.depthTestActive || (spirvShader && spirvShader->hasBuiltinInput(spv::BuiltInPosition));
+		return state.depthTestActive || (spirvShader && spirvShader->hasBuiltinInput(spv::BuiltInFragCoord));
 	}
 
 	bool QuadRasterizer::interpolateW() const
 	{
-		return state.perspective || (spirvShader && spirvShader->hasBuiltinInput(spv::BuiltInPosition));
+		// Note: could optimize cases where there is a fragment shader but it has no
+		// perspective-correct inputs, but that's vanishingly rare.
+		return spirvShader != nullptr;
 	}
 }

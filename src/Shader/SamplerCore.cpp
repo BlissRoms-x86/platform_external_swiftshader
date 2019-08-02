@@ -506,7 +506,8 @@ namespace sw
 		for(int i = 0; i < 4; ++i)
 		{
 			Int baseLevel = *Pointer<Int>(texture + OFFSET(Texture, baseLevel));
-			Pointer<Byte> mipmap = texture + OFFSET(Texture, mipmap) + (As<Int>(Extract(lod, i)) + baseLevel) * sizeof(Mipmap);
+			Int index = Min(As<UInt>(As<Int>(Extract(lod, i)) + baseLevel), MIPMAP_LEVELS - 1);
+			Pointer<Byte> mipmap = texture + OFFSET(Texture, mipmap) + index * sizeof(Mipmap);
 			size.x = Insert(size.x, As<Float>(Int(*Pointer<Short>(mipmap + OFFSET(Mipmap, width)))), i);
 			size.y = Insert(size.y, As<Float>(Int(*Pointer<Short>(mipmap + OFFSET(Mipmap, height)))), i);
 			size.z = Insert(size.z, As<Float>(Int(*Pointer<Short>(mipmap + OFFSET(Mipmap, depth)))), i);
@@ -2481,7 +2482,7 @@ namespace sw
 				default:   // Wrap
 					{
 						Int4 under = CmpLT(xyz0, Int4(0));
-						xyz0 = (under & maxXYZ) | (~under & xyz0);   // xyz < 0 ? dim - 1 : xyz   // FIXME: IfThenElse()
+						xyz0 = (under & maxXYZ) | (~under & xyz0);   // xyz < 0 ? dim - 1 : xyz   // TODO: IfThenElse()
 
 						Int4 nover = CmpLT(xyz1, dim);
 						xyz1 = nover & xyz1;   // xyz >= dim ? 0 : xyz

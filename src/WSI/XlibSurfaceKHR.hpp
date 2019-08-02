@@ -16,9 +16,9 @@
 #define SWIFTSHADER_XLIBSURFACEKHR_HPP
 
 #include "Vulkan/VkObject.hpp"
-#include "Vulkan/VkImage.hpp"
 #include "libX11.hpp"
 #include "VkSurfaceKHR.hpp"
+#include "vulkan/vulkan_xlib.h"
 
 #include <map>
 
@@ -27,8 +27,6 @@ namespace vk {
 class XlibSurfaceKHR : public SurfaceKHR, public ObjectBase<XlibSurfaceKHR, VkSurfaceKHR> {
 public:
 	XlibSurfaceKHR(const VkXlibSurfaceCreateInfoKHR *pCreateInfo, void *mem);
-
-	~XlibSurfaceKHR() = delete;
 
 	void destroySurface(const VkAllocationCallbacks *pAllocator) override;
 

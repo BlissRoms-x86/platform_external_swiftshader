@@ -13,6 +13,7 @@
 // limitations under the License.
 
 #include "Reactor.hpp"
+#include "Debug.hpp"
 
 // Define REACTOR_MATERIALIZE_LVALUES_ON_DEFINITION to non-zero to ensure all
 // variables have a stack location obtained throuch alloca().
@@ -20,12 +21,63 @@
 #define REACTOR_MATERIALIZE_LVALUES_ON_DEFINITION 0
 #endif
 
+namespace
+{
+	// Introduced in C++20.
+	template <class ForwardIterator, class UnaryPredicate>
+	ForwardIterator remove_if(ForwardIterator first, ForwardIterator last,
+								UnaryPredicate pred)
+	{
+		ForwardIterator result = first;
+		while (first!=last) {
+			if (!pred(*first)) {
+				*result = std::move(*first);
+				++result;
+			}
+			++first;
+		}
+		return result;
+	}
+}
+
 namespace rr
 {
+	const Config::Edit Config::Edit::None = {};
+
+	Config Config::Edit::apply(const Config &cfg) const
+	{
+		if (this == &None) { return cfg; }
+
+		auto level = optLevelChanged ? optLevel : cfg.optimization.getLevel();
+		auto passes = cfg.optimization.getPasses();
+		apply(optPassEdits, passes);
+		return Config{ Optimization{level, passes} };
+	}
+
+	template <typename T>
+	void rr::Config::Edit::apply(const std::vector<std::pair<ListEdit, T>> & edits, std::vector<T>& list) const
+	{
+		for (auto & edit : edits)
+		{
+			switch (edit.first)
+			{
+			case ListEdit::Add:
+				list.push_back(edit.second);
+				break;
+			case ListEdit::Remove:
+				::remove_if(list.begin(), list.end(), [&](T item) { return item == edit.second; });
+				break;
+			case ListEdit::Clear:
+				list.clear();
+				break;
+			}
+		}
+	}
+
 	// Set of variables that do not have a stack location yet.
 	std::unordered_set<Variable*> Variable::unmaterializedVariables;
 
-	Variable::Variable(Type *type, int arraySize) : type(type), arraySize(arraySize)
+	Variable::Variable(Type *type, int arraySize) : arraySize(arraySize), type(type)
 	{
 		#if REACTOR_MATERIALIZE_LVALUES_ON_DEFINITION
 			materialize();
@@ -2507,6 +2559,61 @@ namespace rr
 		return RValue<Long>(Nucleus::createAtomicAdd(x.value, y.value));
 	}
 
+	RValue<UInt> AddAtomic(RValue<Pointer<UInt> > x, RValue<UInt> y, std::memory_order memoryOrder)
+	{
+		return RValue<UInt>(Nucleus::createAtomicAdd(x.value, y.value, memoryOrder));
+	}
+
+	RValue<UInt> SubAtomic(RValue<Pointer<UInt> > x, RValue<UInt> y, std::memory_order memoryOrder)
+	{
+		return RValue<UInt>(Nucleus::createAtomicSub(x.value, y.value, memoryOrder));
+	}
+
+	RValue<UInt> AndAtomic(RValue<Pointer<UInt> > x, RValue<UInt> y, std::memory_order memoryOrder)
+	{
+		return RValue<UInt>(Nucleus::createAtomicAnd(x.value, y.value, memoryOrder));
+	}
+
+	RValue<UInt> OrAtomic(RValue<Pointer<UInt> > x, RValue<UInt> y, std::memory_order memoryOrder)
+	{
+		return RValue<UInt>(Nucleus::createAtomicOr(x.value, y.value, memoryOrder));
+	}
+
+	RValue<UInt> XorAtomic(RValue<Pointer<UInt> > x, RValue<UInt> y, std::memory_order memoryOrder)
+	{
+		return RValue<UInt>(Nucleus::createAtomicXor(x.value, y.value, memoryOrder));
+	}
+
+	RValue<Int> MinAtomic(RValue<Pointer<Int> > x, RValue<Int> y, std::memory_order memoryOrder)
+	{
+		return RValue<Int>(Nucleus::createAtomicMin(x.value, y.value, memoryOrder));
+	}
+
+	RValue<UInt> MinAtomic(RValue<Pointer<UInt> > x, RValue<UInt> y, std::memory_order memoryOrder)
+	{
+		return RValue<UInt>(Nucleus::createAtomicUMin(x.value, y.value, memoryOrder));
+	}
+
+	RValue<Int> MaxAtomic(RValue<Pointer<Int> > x, RValue<Int> y, std::memory_order memoryOrder)
+	{
+		return RValue<Int>(Nucleus::createAtomicMax(x.value, y.value, memoryOrder));
+	}
+
+	RValue<UInt> MaxAtomic(RValue<Pointer<UInt> > x, RValue<UInt> y, std::memory_order memoryOrder)
+	{
+		return RValue<UInt>(Nucleus::createAtomicUMax(x.value, y.value, memoryOrder));
+	}
+
+	RValue<UInt> ExchangeAtomic(RValue<Pointer<UInt> > x, RValue<UInt> y, std::memory_order memoryOrder)
+	{
+		return RValue<UInt>(Nucleus::createAtomicExchange(x.value, y.value, memoryOrder));
+	}
+
+	RValue<UInt> CompareExchangeAtomic(RValue<Pointer<UInt> > x, RValue<UInt> y, RValue<UInt> compare, std::memory_order memoryOrderEqual, std::memory_order memoryOrderUnequal)
+	{
+		return RValue<UInt>(Nucleus::createAtomicCompareExchange(x.value, y.value, compare.value, memoryOrderEqual, memoryOrderUnequal));
+	}
+
 	UInt::UInt(Argument<UInt> argument)
 	{
 		materialize();  // FIXME(b/129757459)
@@ -3120,6 +3227,16 @@ namespace rr
 		return RValue<UInt2>(Nucleus::createNot(val.value));
 	}
 
+	RValue<UInt> Extract(RValue<UInt2> val, int i)
+	{
+		return RValue<UInt>(Nucleus::createExtractElement(val.value, UInt::getType(), i));
+	}
+
+	RValue<UInt2> Insert(RValue<UInt2> val, RValue<UInt> element, int i)
+	{
+		return RValue<UInt2>(Nucleus::createInsertElement(val.value, element.value, i));
+	}
+
 	Int4::Int4() : XYZW(this)
 	{
 	}
@@ -3434,6 +3551,16 @@ namespace rr
 		storeValue(packed);
 	}
 
+	UInt4::UInt4(const UInt &rhs) : XYZW(this)
+	{
+		*this = RValue<UInt>(rhs.loadValue());
+	}
+
+	UInt4::UInt4(const Reference<UInt> &rhs) : XYZW(this)
+	{
+		*this = RValue<UInt>(rhs.loadValue());
+	}
+
 	RValue<UInt4> UInt4::operator=(RValue<UInt4> rhs)
 	{
 		storeValue(rhs.value);
@@ -3570,6 +3697,21 @@ namespace rr
 	RValue<UInt4> operator~(RValue<UInt4> val)
 	{
 		return RValue<UInt4>(Nucleus::createNot(val.value));
+	}
+
+	RValue<UInt> Extract(RValue<UInt4> x, int i)
+	{
+		return RValue<UInt>(Nucleus::createExtractElement(x.value, Int::getType(), i));
+	}
+
+	RValue<UInt4> Insert(RValue<UInt4> x, RValue<UInt> element, int i)
+	{
+		return RValue<UInt4>(Nucleus::createInsertElement(x.value, element.value, i));
+	}
+
+	RValue<UInt4> Swizzle(RValue<UInt4> x, unsigned char select)
+	{
+		return RValue<UInt4>(createSwizzle4(x.value, select));
 	}
 
 	Half::Half(RValue<Float> cast)
@@ -4131,15 +4273,8 @@ namespace rr
 	void Return()
 	{
 		Nucleus::createRetVoid();
+		// Place any unreachable instructions in an unreferenced block.
 		Nucleus::setInsertBlock(Nucleus::createBasicBlock());
-		Nucleus::createUnreachable();
-	}
-
-	void Return(RValue<Int> ret)
-	{
-		Nucleus::createRet(ret.value);
-		Nucleus::setInsertBlock(Nucleus::createBasicBlock());
-		Nucleus::createUnreachable();
 	}
 
 	void branch(RValue<Bool> cmp, BasicBlock *bodyBB, BasicBlock *endBB)
@@ -4147,4 +4282,55 @@ namespace rr
 		Nucleus::createCondBr(cmp.value, bodyBB, endBB);
 		Nucleus::setInsertBlock(bodyBB);
 	}
+
+	RValue<Float4> MaskedLoad(RValue<Pointer<Float4>> base, RValue<Int4> mask, unsigned int alignment, bool zeroMaskedLanes /* = false */)
+	{
+		return RValue<Float4>(Nucleus::createMaskedLoad(base.value, Float::getType(), mask.value, alignment, zeroMaskedLanes));
+	}
+
+	RValue<Int4> MaskedLoad(RValue<Pointer<Int4>> base, RValue<Int4> mask, unsigned int alignment, bool zeroMaskedLanes /* = false */)
+	{
+		return RValue<Int4>(Nucleus::createMaskedLoad(base.value, Int::getType(), mask.value, alignment, zeroMaskedLanes));
+	}
+
+	void MaskedStore(RValue<Pointer<Float4>> base, RValue<Float4> val, RValue<Int4> mask, unsigned int alignment)
+	{
+		Nucleus::createMaskedStore(base.value, val.value, mask.value, alignment);
+	}
+
+	void MaskedStore(RValue<Pointer<Int4>> base, RValue<Int4> val, RValue<Int4> mask, unsigned int alignment)
+	{
+		Nucleus::createMaskedStore(base.value, val.value, mask.value, alignment);
+	}
+
+	RValue<Float4> Gather(RValue<Pointer<Float>> base, RValue<Int4> offsets, RValue<Int4> mask, unsigned int alignment, bool zeroMaskedLanes /* = false */)
+	{
+		return RValue<Float4>(Nucleus::createGather(base.value, Float::getType(), offsets.value, mask.value, alignment, zeroMaskedLanes));
+	}
+
+	RValue<Int4> Gather(RValue<Pointer<Int>> base, RValue<Int4> offsets, RValue<Int4> mask, unsigned int alignment, bool zeroMaskedLanes /* = false */)
+	{
+		return RValue<Int4>(Nucleus::createGather(base.value, Int::getType(), offsets.value, mask.value, alignment, zeroMaskedLanes));
+	}
+
+	void Scatter(RValue<Pointer<Float>> base, RValue<Float4> val, RValue<Int4> offsets, RValue<Int4> mask, unsigned int alignment)
+	{
+		Nucleus::createScatter(base.value, val.value, offsets.value, mask.value, alignment);
+	}
+
+	void Scatter(RValue<Pointer<Int>> base, RValue<Int4> val, RValue<Int4> offsets, RValue<Int4> mask, unsigned int alignment)
+	{
+		Nucleus::createScatter(base.value, val.value, offsets.value, mask.value, alignment);
+	}
+
+	void Fence(std::memory_order memoryOrder)
+	{
+		ASSERT_MSG(memoryOrder == std::memory_order_acquire ||
+			memoryOrder == std::memory_order_release ||
+			memoryOrder == std::memory_order_acq_rel ||
+			memoryOrder == std::memory_order_seq_cst,
+			"Unsupported memoryOrder: %d", int(memoryOrder));
+		Nucleus::createFence(memoryOrder);
+	}
+
 }

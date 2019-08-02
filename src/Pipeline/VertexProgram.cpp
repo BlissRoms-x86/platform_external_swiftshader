@@ -27,16 +27,11 @@ namespace sw
 	VertexProgram::VertexProgram(
 			const VertexProcessor::State &state,
 			vk::PipelineLayout const *pipelineLayout,
-			SpirvShader const *spirvShader)
-		: VertexRoutine(state, pipelineLayout, spirvShader)
+			SpirvShader const *spirvShader,
+			const vk::DescriptorSet::Bindings &descriptorSets)
+		: VertexRoutine(state, pipelineLayout, spirvShader),
+		  descriptorSets(descriptorSets)
 	{
-		ifDepth = 0;
-		loopRepDepth = 0;
-		currentLabel = -1;
-		whileTest = false;
-
-		enableStack[0] = Int4(0xFFFFFFFF, 0xFFFFFFFF, 0xFFFFFFFF, 0xFFFFFFFF);
-
 		auto it = spirvShader->inputBuiltins.find(spv::BuiltInInstanceIndex);
 		if (it != spirvShader->inputBuiltins.end())
 		{
@@ -49,41 +44,54 @@ namespace sw
 		routine.descriptorSets = data + OFFSET(DrawData, descriptorSets);
 		routine.descriptorDynamicOffsets = data + OFFSET(DrawData, descriptorDynamicOffsets);
 		routine.pushConstants = data + OFFSET(DrawData, pushConstants);
+		routine.constants = *Pointer<Pointer<Byte>>(data + OFFSET(DrawData, constants));
+
+		it = spirvShader->inputBuiltins.find(spv::BuiltInSubgroupSize);
+		if (it != spirvShader->inputBuiltins.end())
+		{
+			ASSERT(it->second.SizeInComponents == 1);
+			routine.getVariable(it->second.Id)[it->second.FirstComponent] = As<SIMD::Float>(SIMD::Int(SIMD::Width));
+		}
+
+		it = spirvShader->inputBuiltins.find(spv::BuiltInSubgroupLocalInvocationId);
+		if (it != spirvShader->inputBuiltins.end())
+		{
+			ASSERT(it->second.SizeInComponents == 1);
+			routine.getVariable(it->second.Id)[it->second.FirstComponent] = As<SIMD::Float>(SIMD::Int(0, 1, 2, 3));
+		}
+
+		it = spirvShader->inputBuiltins.find(spv::BuiltInDeviceIndex);
+		if (it != spirvShader->inputBuiltins.end())
+		{
+			ASSERT(it->second.SizeInComponents == 1);
+			// Only a single physical device is supported.
+			routine.getVariable(it->second.Id)[it->second.FirstComponent] = As<SIMD::Float>(SIMD::Int(0, 0, 0, 0));
+		}
 	}
 
 	VertexProgram::~VertexProgram()
 	{
 	}
 
-	void VertexProgram::program(UInt &index)
+	void VertexProgram::program(Pointer<UInt> &batch)
 	{
-		//	shader->print("VertexShader-%0.8X.txt", state.shaderID);
-
-		enableIndex = 0;
-
 		auto it = spirvShader->inputBuiltins.find(spv::BuiltInVertexIndex);
 		if (it != spirvShader->inputBuiltins.end())
 		{
 			assert(it->second.SizeInComponents == 1);
+
+			Int4 indices;
+			indices = Insert(indices, As<Int>(batch[0]), 0);
+			indices = Insert(indices, As<Int>(batch[1]), 1);
+			indices = Insert(indices, As<Int>(batch[2]), 2);
+			indices = Insert(indices, As<Int>(batch[3]), 3);
 			routine.getVariable(it->second.Id)[it->second.FirstComponent] =
-					As<Float4>(Int4(index) + Int4(0, 1, 2, 3));
+					As<Float4>(indices + Int4(*Pointer<Int>(data + OFFSET(DrawData, baseVertex))));
 		}
 
-		auto activeLaneMask = SIMD::Int(0xFFFFFFFF); // TODO: Control this.
-		spirvShader->emit(&routine, activeLaneMask);
-
-		if(currentLabel != -1)
-		{
-			Nucleus::setInsertBlock(returnBlock);
-		}
+		auto activeLaneMask = SIMD::Int(0xFFFFFFFF);
+		spirvShader->emit(&routine, activeLaneMask, descriptorSets);
 
 		spirvShader->emitEpilog(&routine);
 	}
-
-	Int4 VertexProgram::enableMask()
-	{
-		Int4 enable = true ? Int4(enableStack[enableIndex]) : Int4(0xFFFFFFFF);
-		return enable;
-	}
-
 }

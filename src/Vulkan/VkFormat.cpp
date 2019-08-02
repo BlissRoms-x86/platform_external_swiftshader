@@ -86,6 +86,120 @@ bool Format::isNonNormalizedInteger() const
 	return isSignedNonNormalizedInteger() || isUnsignedNonNormalizedInteger();
 }
 
+VkImageAspectFlags Format::getAspects() const
+{
+	// TODO: probably just flatten this out to a full format list, and alter
+	// isDepth / isStencil etc to check for their aspect
+
+	VkImageAspectFlags aspects = 0;
+	if (isDepth()) aspects |= VK_IMAGE_ASPECT_DEPTH_BIT;
+	if (isStencil()) aspects |= VK_IMAGE_ASPECT_STENCIL_BIT;
+
+	// YCbCr formats
+	switch(format)
+	{
+	case VK_FORMAT_G8_B8_R8_3PLANE_420_UNORM:
+		aspects = VK_IMAGE_ASPECT_PLANE_0_BIT | VK_IMAGE_ASPECT_PLANE_1_BIT | VK_IMAGE_ASPECT_PLANE_2_BIT;
+		break;
+	case VK_FORMAT_G8_B8R8_2PLANE_420_UNORM:
+		aspects = VK_IMAGE_ASPECT_PLANE_0_BIT | VK_IMAGE_ASPECT_PLANE_1_BIT;
+		break;
+	default:
+		ASSERT(!isYcbcrFormat());
+		break;
+	}
+
+	// Anything else is "color".
+	if (!aspects) aspects |= VK_IMAGE_ASPECT_COLOR_BIT;
+	return aspects;
+}
+
+Format Format::getAspectFormat(VkImageAspectFlags aspect) const
+{
+	switch(aspect)
+	{
+	case VK_IMAGE_ASPECT_COLOR_BIT:
+	case (VK_IMAGE_ASPECT_DEPTH_BIT | VK_IMAGE_ASPECT_STENCIL_BIT):
+	case (VK_IMAGE_ASPECT_PLANE_0_BIT | VK_IMAGE_ASPECT_PLANE_1_BIT):
+	case (VK_IMAGE_ASPECT_PLANE_0_BIT | VK_IMAGE_ASPECT_PLANE_1_BIT | VK_IMAGE_ASPECT_PLANE_2_BIT):
+		return format;
+
+	case VK_IMAGE_ASPECT_DEPTH_BIT:
+		switch(format)
+		{
+		case VK_FORMAT_D16_UNORM:
+		case VK_FORMAT_D16_UNORM_S8_UINT:
+			return VK_FORMAT_D16_UNORM;
+		case VK_FORMAT_D24_UNORM_S8_UINT:
+			return VK_FORMAT_X8_D24_UNORM_PACK32;
+		case VK_FORMAT_D32_SFLOAT:
+		case VK_FORMAT_D32_SFLOAT_S8_UINT:
+			return VK_FORMAT_D32_SFLOAT;
+		default:
+			UNSUPPORTED("format %d", int(format));
+			break;
+		}
+		break;
+
+	case VK_IMAGE_ASPECT_STENCIL_BIT:
+		switch(format)
+		{
+		case VK_FORMAT_D16_UNORM_S8_UINT:
+		case VK_FORMAT_D24_UNORM_S8_UINT:
+		case VK_FORMAT_D32_SFLOAT_S8_UINT:
+			return VK_FORMAT_S8_UINT;
+		default:
+			UNSUPPORTED("format %d", int(format));
+			break;
+		}
+		break;
+
+	// YCbCr formats
+	// Vulkan 1.1 section 32.1.1. Compatible formats of planes of multi-planar formats
+	case VK_IMAGE_ASPECT_PLANE_0_BIT:
+		switch(format)
+		{
+		case VK_FORMAT_G8_B8_R8_3PLANE_420_UNORM:
+		case VK_FORMAT_G8_B8R8_2PLANE_420_UNORM:
+			return VK_FORMAT_R8_UNORM;
+		default:
+			UNSUPPORTED("format %d", int(format));
+			break;
+		}
+		break;
+
+	case VK_IMAGE_ASPECT_PLANE_1_BIT:
+		switch(format)
+		{
+		case VK_FORMAT_G8_B8_R8_3PLANE_420_UNORM:
+			return VK_FORMAT_R8_UNORM;
+		case VK_FORMAT_G8_B8R8_2PLANE_420_UNORM:
+			return VK_FORMAT_R8G8_UNORM;
+		default:
+			UNSUPPORTED("format %d", int(format));
+			break;
+		}
+		break;
+
+	case VK_IMAGE_ASPECT_PLANE_2_BIT:
+		switch(format)
+		{
+		case VK_FORMAT_G8_B8_R8_3PLANE_420_UNORM:
+			return VK_FORMAT_R8_UNORM;
+		default:
+			UNSUPPORTED("format %d", int(format));
+			break;
+		}
+		break;
+
+	default:
+		UNSUPPORTED("aspect %x", int(aspect));
+		break;
+	}
+
+	return format;
+}
+
 bool Format::isStencil() const
 {
 	switch(format)
@@ -122,7 +236,24 @@ bool Format::isDepth() const
 
 bool Format::hasQuadLayout() const
 {
-	return false;
+	switch(format)
+	{
+	case VK_FORMAT_S8_UINT:
+		return true;
+	default:
+		return false;
+	}
+}
+
+VkFormat Format::getNonQuadLayoutFormat() const
+{
+	switch(format)
+	{
+	case VK_FORMAT_S8_UINT:
+		return VK_FORMAT_R8_UINT;
+	default:
+		return format;
+	}
 }
 
 bool Format::isSRGBformat() const
@@ -136,38 +267,9 @@ bool Format::isSRGBformat() const
 	case VK_FORMAT_R8G8B8A8_SRGB:
 	case VK_FORMAT_B8G8R8A8_SRGB:
 	case VK_FORMAT_A8B8G8R8_SRGB_PACK32:
-		return true;
-	default:
-		return false;
-	}
-}
-
-bool Format::isSRGBreadable() const
-{
-	// Keep in sync with Capabilities::isSRGBreadable
-	switch(format)
-	{
-	case VK_FORMAT_B8G8R8A8_UNORM:
-	case VK_FORMAT_R8G8B8A8_UNORM:
-	case VK_FORMAT_R8G8B8A8_SRGB:
-	case VK_FORMAT_R5G6B5_UNORM_PACK16:
-	case VK_FORMAT_A1R5G5B5_UNORM_PACK16:
-		return true;
-	default:
-		return false;
-	}
-}
-
-bool Format::isSRGBwritable() const
-{
-	// Keep in sync with Capabilities::isSRGBwritable
-	switch(format)
-	{
-	case VK_FORMAT_UNDEFINED:
-	case VK_FORMAT_B8G8R8A8_UNORM:
-	case VK_FORMAT_R8G8B8A8_UNORM:
-	case VK_FORMAT_R8G8B8A8_SRGB:
-	case VK_FORMAT_R5G6B5_UNORM_PACK16:
+	case VK_FORMAT_ETC2_R8G8B8_SRGB_BLOCK:
+	case VK_FORMAT_ETC2_R8G8B8A1_SRGB_BLOCK:
+	case VK_FORMAT_ETC2_R8G8B8A8_SRGB_BLOCK:
 		return true;
 	default:
 		return false;
@@ -292,6 +394,7 @@ bool Format::isFloatFormat() const
 	case VK_FORMAT_S8_UINT:
 	case VK_FORMAT_D16_UNORM_S8_UINT:
 	case VK_FORMAT_D24_UNORM_S8_UINT:
+	case VK_FORMAT_G8_B8_R8_3PLANE_420_UNORM:
 	case VK_FORMAT_G8_B8R8_2PLANE_420_UNORM:
 		return false;
 	case VK_FORMAT_R16_SFLOAT:
@@ -312,10 +415,22 @@ bool Format::isFloatFormat() const
 	case VK_FORMAT_D32_SFLOAT_S8_UINT:
 		return true;
 	default:
-		ASSERT(false);
+		UNIMPLEMENTED("Format: %d", int(format));
 	}
 
 	return false;
+}
+
+bool Format::isYcbcrFormat() const
+{
+	switch(format)
+	{
+	case VK_FORMAT_G8_B8_R8_3PLANE_420_UNORM:
+	case VK_FORMAT_G8_B8R8_2PLANE_420_UNORM:
+		return true;
+	default:
+		return false;
+	}
 }
 
 bool Format::isCompressed() const
@@ -380,6 +495,352 @@ bool Format::isCompressed() const
 	default:
 		return false;
 	}
+}
+
+VkFormat Format::getDecompressedFormat() const
+{
+	// Note: our ETC2 decoder decompresses the 64 bit RGB compressed texel data to B8G8R8
+	switch(format)
+	{
+	case VK_FORMAT_ETC2_R8G8B8_UNORM_BLOCK:
+		return VK_FORMAT_B8G8R8A8_UNORM;
+	case VK_FORMAT_ETC2_R8G8B8_SRGB_BLOCK:
+		return VK_FORMAT_B8G8R8A8_SRGB;
+	case VK_FORMAT_ETC2_R8G8B8A1_UNORM_BLOCK:
+	case VK_FORMAT_ETC2_R8G8B8A8_UNORM_BLOCK:
+		return VK_FORMAT_B8G8R8A8_UNORM;
+	case VK_FORMAT_ETC2_R8G8B8A1_SRGB_BLOCK:
+	case VK_FORMAT_ETC2_R8G8B8A8_SRGB_BLOCK:
+		return VK_FORMAT_B8G8R8A8_SRGB;
+	case VK_FORMAT_EAC_R11_UNORM_BLOCK:
+		return VK_FORMAT_R16_UNORM;
+	case VK_FORMAT_EAC_R11_SNORM_BLOCK:
+		return VK_FORMAT_R16_SNORM;
+	case VK_FORMAT_EAC_R11G11_UNORM_BLOCK:
+		return VK_FORMAT_R16G16_UNORM;
+	case VK_FORMAT_EAC_R11G11_SNORM_BLOCK:
+		return VK_FORMAT_R16G16_SNORM;
+	default:
+		UNIMPLEMENTED("format: %d", int(format));
+		return VK_FORMAT_UNDEFINED;
+	}
+}
+
+VkFormat Format::compatibleFormat() const
+{
+	// According to the Vulkan 1.1 Spec, 37.1.6. Format Compatibility Classes:
+	// "Uncompressed color formats are compatible with each other if they occupy
+	//  the same number of bits per texel block. Compressed color formats are
+	//  compatible with each other if the only difference between them is the
+	//  numerical type of the uncompressed pixels (e.g. signed vs. unsigned, or
+	//  SRGB vs. UNORM encoding). Each depth/stencil format is only compatible
+	//  with itself. In the following table, all the formats in the same row are
+	//  compatible."
+
+	// Return a single format per group of compatible formats, for quick comparison
+	switch(format)
+	{
+	// 8 - bit, Block size 1 byte, 1 texel / block
+	case VK_FORMAT_R4G4_UNORM_PACK8:
+	case VK_FORMAT_R8_UNORM:
+	case VK_FORMAT_R8_SNORM:
+	case VK_FORMAT_R8_USCALED:
+	case VK_FORMAT_R8_SSCALED:
+	case VK_FORMAT_R8_UINT:
+	case VK_FORMAT_R8_SINT:
+	case VK_FORMAT_R8_SRGB:
+		return VK_FORMAT_R8_UNORM;
+
+	// 16 - bit, Block size 2 bytes, 1 texel / block
+	case VK_FORMAT_R4G4B4A4_UNORM_PACK16:
+	case VK_FORMAT_B4G4R4A4_UNORM_PACK16:
+	case VK_FORMAT_R5G6B5_UNORM_PACK16:
+	case VK_FORMAT_B5G6R5_UNORM_PACK16:
+	case VK_FORMAT_R5G5B5A1_UNORM_PACK16:
+	case VK_FORMAT_B5G5R5A1_UNORM_PACK16:
+	case VK_FORMAT_A1R5G5B5_UNORM_PACK16:
+	case VK_FORMAT_R8G8_UNORM:
+	case VK_FORMAT_R8G8_SNORM:
+	case VK_FORMAT_R8G8_USCALED:
+	case VK_FORMAT_R8G8_SSCALED:
+	case VK_FORMAT_R8G8_UINT:
+	case VK_FORMAT_R8G8_SINT:
+	case VK_FORMAT_R8G8_SRGB:
+	case VK_FORMAT_R16_UNORM:
+	case VK_FORMAT_R16_SNORM:
+	case VK_FORMAT_R16_USCALED:
+	case VK_FORMAT_R16_SSCALED:
+	case VK_FORMAT_R16_UINT:
+	case VK_FORMAT_R16_SINT:
+	case VK_FORMAT_R16_SFLOAT:
+	case VK_FORMAT_R10X6_UNORM_PACK16:
+	case VK_FORMAT_R12X4_UNORM_PACK16:
+		return VK_FORMAT_R16_UNORM;
+
+	// 24 - bit, Block size 3 bytes, 1 texel / block
+	case VK_FORMAT_R8G8B8_UNORM:
+	case VK_FORMAT_R8G8B8_SNORM:
+	case VK_FORMAT_R8G8B8_USCALED:
+	case VK_FORMAT_R8G8B8_SSCALED:
+	case VK_FORMAT_R8G8B8_UINT:
+	case VK_FORMAT_R8G8B8_SINT:
+	case VK_FORMAT_R8G8B8_SRGB:
+	case VK_FORMAT_B8G8R8_UNORM:
+	case VK_FORMAT_B8G8R8_SNORM:
+	case VK_FORMAT_B8G8R8_USCALED:
+	case VK_FORMAT_B8G8R8_SSCALED:
+	case VK_FORMAT_B8G8R8_UINT:
+	case VK_FORMAT_B8G8R8_SINT:
+	case VK_FORMAT_B8G8R8_SRGB:
+		return VK_FORMAT_R8G8B8_UNORM;
+
+	// 32 - bit, Block size 4 bytes, 1 texel / block
+	case VK_FORMAT_R8G8B8A8_UNORM:
+	case VK_FORMAT_R8G8B8A8_SNORM:
+	case VK_FORMAT_R8G8B8A8_USCALED:
+	case VK_FORMAT_R8G8B8A8_SSCALED:
+	case VK_FORMAT_R8G8B8A8_UINT:
+	case VK_FORMAT_R8G8B8A8_SINT:
+	case VK_FORMAT_R8G8B8A8_SRGB:
+	case VK_FORMAT_B8G8R8A8_UNORM:
+	case VK_FORMAT_B8G8R8A8_SNORM:
+	case VK_FORMAT_B8G8R8A8_USCALED:
+	case VK_FORMAT_B8G8R8A8_SSCALED:
+	case VK_FORMAT_B8G8R8A8_UINT:
+	case VK_FORMAT_B8G8R8A8_SINT:
+	case VK_FORMAT_B8G8R8A8_SRGB:
+	case VK_FORMAT_A8B8G8R8_UNORM_PACK32:
+	case VK_FORMAT_A8B8G8R8_SNORM_PACK32:
+	case VK_FORMAT_A8B8G8R8_USCALED_PACK32:
+	case VK_FORMAT_A8B8G8R8_SSCALED_PACK32:
+	case VK_FORMAT_A8B8G8R8_UINT_PACK32:
+	case VK_FORMAT_A8B8G8R8_SINT_PACK32:
+	case VK_FORMAT_A8B8G8R8_SRGB_PACK32:
+	case VK_FORMAT_A2R10G10B10_UNORM_PACK32:
+	case VK_FORMAT_A2R10G10B10_SNORM_PACK32:
+	case VK_FORMAT_A2R10G10B10_USCALED_PACK32:
+	case VK_FORMAT_A2R10G10B10_SSCALED_PACK32:
+	case VK_FORMAT_A2R10G10B10_UINT_PACK32:
+	case VK_FORMAT_A2R10G10B10_SINT_PACK32:
+	case VK_FORMAT_A2B10G10R10_UNORM_PACK32:
+	case VK_FORMAT_A2B10G10R10_SNORM_PACK32:
+	case VK_FORMAT_A2B10G10R10_USCALED_PACK32:
+	case VK_FORMAT_A2B10G10R10_SSCALED_PACK32:
+	case VK_FORMAT_A2B10G10R10_UINT_PACK32:
+	case VK_FORMAT_A2B10G10R10_SINT_PACK32:
+	case VK_FORMAT_R16G16_UNORM:
+	case VK_FORMAT_R16G16_SNORM:
+	case VK_FORMAT_R16G16_USCALED:
+	case VK_FORMAT_R16G16_SSCALED:
+	case VK_FORMAT_R16G16_UINT:
+	case VK_FORMAT_R16G16_SINT:
+	case VK_FORMAT_R16G16_SFLOAT:
+	case VK_FORMAT_R32_UINT:
+	case VK_FORMAT_R32_SINT:
+	case VK_FORMAT_R32_SFLOAT:
+	case VK_FORMAT_B10G11R11_UFLOAT_PACK32:
+	case VK_FORMAT_E5B9G9R9_UFLOAT_PACK32:
+	case VK_FORMAT_R10X6G10X6_UNORM_2PACK16:
+	case VK_FORMAT_R12X4G12X4_UNORM_2PACK16:
+		return VK_FORMAT_R8G8B8A8_UNORM;
+
+	// 48 - bit, Block size 6 bytes, 1 texel / block
+	case VK_FORMAT_R16G16B16_UNORM:
+	case VK_FORMAT_R16G16B16_SNORM:
+	case VK_FORMAT_R16G16B16_USCALED:
+	case VK_FORMAT_R16G16B16_SSCALED:
+	case VK_FORMAT_R16G16B16_UINT:
+	case VK_FORMAT_R16G16B16_SINT:
+	case VK_FORMAT_R16G16B16_SFLOAT:
+		return VK_FORMAT_R16G16B16_UNORM;
+
+	// 64 - bit, Block size 8 bytes, 1 texel / block
+	case VK_FORMAT_R16G16B16A16_UNORM:
+	case VK_FORMAT_R16G16B16A16_SNORM:
+	case VK_FORMAT_R16G16B16A16_USCALED:
+	case VK_FORMAT_R16G16B16A16_SSCALED:
+	case VK_FORMAT_R16G16B16A16_UINT:
+	case VK_FORMAT_R16G16B16A16_SINT:
+	case VK_FORMAT_R16G16B16A16_SFLOAT:
+	case VK_FORMAT_R32G32_UINT:
+	case VK_FORMAT_R32G32_SINT:
+	case VK_FORMAT_R32G32_SFLOAT:
+	case VK_FORMAT_R64_UINT:
+	case VK_FORMAT_R64_SINT:
+	case VK_FORMAT_R64_SFLOAT:
+		return VK_FORMAT_R16G16B16A16_UNORM;
+
+	// 96 - bit, Block size 12 bytes, 1 texel / block
+	case VK_FORMAT_R32G32B32_UINT:
+	case VK_FORMAT_R32G32B32_SINT:
+	case VK_FORMAT_R32G32B32_SFLOAT:
+		return VK_FORMAT_R32G32B32_UINT;
+
+	// 128 - bit, Block size 16 bytes, 1 texel / block
+	case VK_FORMAT_R32G32B32A32_UINT:
+	case VK_FORMAT_R32G32B32A32_SINT:
+	case VK_FORMAT_R32G32B32A32_SFLOAT:
+	case VK_FORMAT_R64G64_UINT:
+	case VK_FORMAT_R64G64_SINT:
+	case VK_FORMAT_R64G64_SFLOAT:
+		return VK_FORMAT_R32G32B32A32_UINT;
+
+	// 192 - bit, Block size 24 bytes, 1 texel / block
+	case VK_FORMAT_R64G64B64_UINT:
+	case VK_FORMAT_R64G64B64_SINT:
+	case VK_FORMAT_R64G64B64_SFLOAT:
+		return VK_FORMAT_R64G64B64_UINT;
+
+	// 256 - bit, Block size 32 bytes, 1 texel / block
+	case VK_FORMAT_R64G64B64A64_UINT:
+	case VK_FORMAT_R64G64B64A64_SINT:
+	case VK_FORMAT_R64G64B64A64_SFLOAT:
+		return VK_FORMAT_R64G64B64A64_UINT;
+
+	// BC1_RGB(64 bit), Block size 8 bytes, 16 texels / block
+	case VK_FORMAT_BC1_RGB_UNORM_BLOCK:
+	case VK_FORMAT_BC1_RGB_SRGB_BLOCK:
+		return VK_FORMAT_BC1_RGB_UNORM_BLOCK;
+
+	// BC1_RGBA(64 bit), Block size 8 bytes, 16 texels / block
+	case VK_FORMAT_BC1_RGBA_UNORM_BLOCK:
+	case VK_FORMAT_BC1_RGBA_SRGB_BLOCK:
+		return VK_FORMAT_BC1_RGBA_UNORM_BLOCK;
+
+	// BC2(128 bit), Block size 16 bytes, 16 texels / block
+	case VK_FORMAT_BC2_UNORM_BLOCK:
+	case VK_FORMAT_BC2_SRGB_BLOCK:
+		return VK_FORMAT_BC2_UNORM_BLOCK;
+
+	// BC3(128 bit), Block size 16 bytes, 16 texels / block
+	case VK_FORMAT_BC3_UNORM_BLOCK:
+	case VK_FORMAT_BC3_SRGB_BLOCK:
+		return VK_FORMAT_BC3_UNORM_BLOCK;
+
+	// BC4(64 bit), Block size 8 bytes, 16 texels / block
+	case VK_FORMAT_BC4_UNORM_BLOCK:
+	case VK_FORMAT_BC4_SNORM_BLOCK:
+		return VK_FORMAT_BC4_UNORM_BLOCK;
+
+	// BC5(128 bit), Block size 16 bytes, 16 texels / block
+	case VK_FORMAT_BC5_UNORM_BLOCK:
+	case VK_FORMAT_BC5_SNORM_BLOCK:
+		return VK_FORMAT_BC5_UNORM_BLOCK;
+
+	// BC6H(128 bit), Block size 16 bytes, 16 texels / block
+	case VK_FORMAT_BC6H_UFLOAT_BLOCK:
+	case VK_FORMAT_BC6H_SFLOAT_BLOCK:
+		return VK_FORMAT_BC6H_UFLOAT_BLOCK;
+
+	// BC7(128 bit), Block size 16 bytes, 16 texels / block
+	case VK_FORMAT_BC7_UNORM_BLOCK:
+	case VK_FORMAT_BC7_SRGB_BLOCK:
+		return VK_FORMAT_BC7_UNORM_BLOCK;
+
+	// ETC2_RGB(64 bit), Block size 8 bytes, 16 texels / block
+	case VK_FORMAT_ETC2_R8G8B8_UNORM_BLOCK:
+	case VK_FORMAT_ETC2_R8G8B8_SRGB_BLOCK:
+		return VK_FORMAT_ETC2_R8G8B8_UNORM_BLOCK;
+
+	// ETC2_RGBA(64 bit), Block size 8 bytes, 16 texels / block
+	case VK_FORMAT_ETC2_R8G8B8A1_UNORM_BLOCK:
+	case VK_FORMAT_ETC2_R8G8B8A1_SRGB_BLOCK:
+		return VK_FORMAT_ETC2_R8G8B8A1_UNORM_BLOCK;
+
+	// ETC2_EAC_RGBA(64 bit), Block size 8 bytes, 16 texels / block
+	case VK_FORMAT_ETC2_R8G8B8A8_UNORM_BLOCK:
+	case VK_FORMAT_ETC2_R8G8B8A8_SRGB_BLOCK:
+		return VK_FORMAT_ETC2_R8G8B8A8_UNORM_BLOCK;
+
+	// EAC_R(64 bit), Block size 8 bytes, 16 texels / block
+	case VK_FORMAT_EAC_R11_UNORM_BLOCK:
+	case VK_FORMAT_EAC_R11_SNORM_BLOCK:
+		return VK_FORMAT_EAC_R11_UNORM_BLOCK;
+
+	// EAC_RG(128 bit), Block size 16 bytes, 16 texels / block
+	case VK_FORMAT_EAC_R11G11_UNORM_BLOCK:
+	case VK_FORMAT_EAC_R11G11_SNORM_BLOCK:
+		return VK_FORMAT_EAC_R11G11_UNORM_BLOCK;
+
+	// ASTC_4x4(128 bit), Block size 16 bytes, 16 texels / block
+	case VK_FORMAT_ASTC_4x4_UNORM_BLOCK:
+	case VK_FORMAT_ASTC_4x4_SRGB_BLOCK:
+		return VK_FORMAT_ASTC_4x4_UNORM_BLOCK;
+
+	// ASTC_5x4(128 bit), Block size 16 bytes, 20 texels / block
+	case VK_FORMAT_ASTC_5x4_UNORM_BLOCK:
+	case VK_FORMAT_ASTC_5x4_SRGB_BLOCK:
+		return VK_FORMAT_ASTC_5x4_UNORM_BLOCK;
+
+	// ASTC_5x5(128 bit), Block size 16 bytes, 25 texels / block
+	case VK_FORMAT_ASTC_5x5_UNORM_BLOCK:
+	case VK_FORMAT_ASTC_5x5_SRGB_BLOCK:
+		return VK_FORMAT_ASTC_5x5_UNORM_BLOCK;
+
+	// ASTC_6x5(128 bit), Block size 16 bytes, 30 texels / block
+	case VK_FORMAT_ASTC_6x5_UNORM_BLOCK:
+	case VK_FORMAT_ASTC_6x5_SRGB_BLOCK:
+		return VK_FORMAT_ASTC_6x5_UNORM_BLOCK;
+
+	// ASTC_6x6(128 bit), Block size 16 bytes, 36 texels / block
+	case VK_FORMAT_ASTC_6x6_UNORM_BLOCK:
+	case VK_FORMAT_ASTC_6x6_SRGB_BLOCK:
+		return VK_FORMAT_ASTC_6x6_UNORM_BLOCK;
+
+	// ASTC_8x5(128 bit), Block size 16 bytes, 40 texels / block
+	case VK_FORMAT_ASTC_8x5_UNORM_BLOCK:
+	case VK_FORMAT_ASTC_8x5_SRGB_BLOCK:
+		return VK_FORMAT_ASTC_8x5_UNORM_BLOCK;
+
+	// ASTC_8x6(128 bit), Block size 16 bytes, 48 texels / block
+	case VK_FORMAT_ASTC_8x6_UNORM_BLOCK:
+	case VK_FORMAT_ASTC_8x6_SRGB_BLOCK:
+		return VK_FORMAT_ASTC_8x6_UNORM_BLOCK;
+
+	// ASTC_8x8(128 bit), Block size 16 bytes, 64 texels / block
+	case VK_FORMAT_ASTC_8x8_UNORM_BLOCK:
+	case VK_FORMAT_ASTC_8x8_SRGB_BLOCK:
+		return VK_FORMAT_ASTC_8x8_UNORM_BLOCK;
+
+	// ASTC_10x5(128 bit), Block size 16 bytes, 50 texels / block
+	case VK_FORMAT_ASTC_10x5_UNORM_BLOCK:
+	case VK_FORMAT_ASTC_10x5_SRGB_BLOCK:
+		return VK_FORMAT_ASTC_10x5_UNORM_BLOCK;
+
+	// ASTC_10x6(128 bit), Block size 16 bytes, 60 texels / block
+	case VK_FORMAT_ASTC_10x6_UNORM_BLOCK:
+	case VK_FORMAT_ASTC_10x6_SRGB_BLOCK:
+		return VK_FORMAT_ASTC_10x6_UNORM_BLOCK;
+
+	// ASTC_10x8(128 bit), Block size 16 bytes, 80 texels / block
+	case VK_FORMAT_ASTC_10x8_UNORM_BLOCK:
+	case VK_FORMAT_ASTC_10x8_SRGB_BLOCK:
+		return VK_FORMAT_ASTC_10x8_UNORM_BLOCK;
+
+	// ASTC_10x10(128 bit), Block size 16 bytes, 100 texels / block
+	case VK_FORMAT_ASTC_10x10_UNORM_BLOCK:
+	case VK_FORMAT_ASTC_10x10_SRGB_BLOCK:
+		return VK_FORMAT_ASTC_10x10_UNORM_BLOCK;
+
+	// ASTC_12x10(128 bit), Block size 16 bytes, 120 texels / block
+	case VK_FORMAT_ASTC_12x10_UNORM_BLOCK:
+	case VK_FORMAT_ASTC_12x10_SRGB_BLOCK:
+		return VK_FORMAT_ASTC_12x10_UNORM_BLOCK;
+
+	// ASTC_12x12(128 bit), Block size 16 bytes, 144 texels / block
+	case VK_FORMAT_ASTC_12x12_UNORM_BLOCK:
+	case VK_FORMAT_ASTC_12x12_SRGB_BLOCK:
+		return VK_FORMAT_ASTC_12x12_UNORM_BLOCK;
+
+	// All other formats are only compatible with themselves
+	default:
+		return format;
+	}
+}
+
+bool Format::isCompatible(const Format& other) const
+{
+	return compatibleFormat() == other.compatibleFormat();
 }
 
 int Format::blockWidth() const
@@ -616,6 +1077,8 @@ int Format::componentCount() const
 	case VK_FORMAT_D16_UNORM_S8_UINT:
 	case VK_FORMAT_D24_UNORM_S8_UINT:
 	case VK_FORMAT_D32_SFLOAT_S8_UINT:
+	case VK_FORMAT_EAC_R11_UNORM_BLOCK:
+	case VK_FORMAT_EAC_R11_SNORM_BLOCK:
 		return 1;
 	case VK_FORMAT_R4G4_UNORM_PACK8:
 	case VK_FORMAT_R8G8_UNORM:
@@ -638,6 +1101,8 @@ int Format::componentCount() const
 	case VK_FORMAT_R64G64_UINT:
 	case VK_FORMAT_R64G64_SINT:
 	case VK_FORMAT_R64G64_SFLOAT:
+	case VK_FORMAT_EAC_R11G11_UNORM_BLOCK:
+	case VK_FORMAT_EAC_R11G11_SNORM_BLOCK:
 		return 2;
 	case VK_FORMAT_R5G6B5_UNORM_PACK16:
 	case VK_FORMAT_B5G6R5_UNORM_PACK16:
@@ -670,7 +1135,10 @@ int Format::componentCount() const
 	case VK_FORMAT_R64G64B64_SFLOAT:
 	case VK_FORMAT_B10G11R11_UFLOAT_PACK32:
 	case VK_FORMAT_E5B9G9R9_UFLOAT_PACK32:
+	case VK_FORMAT_G8_B8_R8_3PLANE_420_UNORM:
 	case VK_FORMAT_G8_B8R8_2PLANE_420_UNORM:
+	case VK_FORMAT_ETC2_R8G8B8_UNORM_BLOCK:
+	case VK_FORMAT_ETC2_R8G8B8_SRGB_BLOCK:
 		return 3;
 	case VK_FORMAT_R4G4B4A4_UNORM_PACK16:
 	case VK_FORMAT_B4G4R4A4_UNORM_PACK16:
@@ -723,9 +1191,13 @@ int Format::componentCount() const
 	case VK_FORMAT_R64G64B64A64_UINT:
 	case VK_FORMAT_R64G64B64A64_SINT:
 	case VK_FORMAT_R64G64B64A64_SFLOAT:
+	case VK_FORMAT_ETC2_R8G8B8A1_UNORM_BLOCK:
+	case VK_FORMAT_ETC2_R8G8B8A1_SRGB_BLOCK:
+	case VK_FORMAT_ETC2_R8G8B8A8_UNORM_BLOCK:
+	case VK_FORMAT_ETC2_R8G8B8A8_SRGB_BLOCK:
 		return 4;
 	default:
-		ASSERT(false);
+		UNIMPLEMENTED("Format: %d", int(format));
 	}
 
 	return 1;
@@ -806,7 +1278,11 @@ bool Format::isUnsignedComponent(int component) const
 	case VK_FORMAT_D24_UNORM_S8_UINT:
 	case VK_FORMAT_D32_SFLOAT:
 	case VK_FORMAT_D32_SFLOAT_S8_UINT:
-	case VK_FORMAT_G8_B8R8_2PLANE_420_UNORM:
+	case VK_FORMAT_EAC_R11_UNORM_BLOCK:
+	case VK_FORMAT_EAC_R11G11_UNORM_BLOCK:
+	case VK_FORMAT_ETC2_R8G8B8_UNORM_BLOCK:
+	case VK_FORMAT_ETC2_R8G8B8A1_UNORM_BLOCK:
+	case VK_FORMAT_ETC2_R8G8B8A8_UNORM_BLOCK:
 		return true;
 	case VK_FORMAT_R8G8B8A8_SNORM:
 	case VK_FORMAT_R8G8B8A8_SSCALED:
@@ -831,6 +1307,15 @@ bool Format::isUnsignedComponent(int component) const
 	case VK_FORMAT_R32G32B32A32_SFLOAT:
 	case VK_FORMAT_R64G64B64A64_SINT:
 	case VK_FORMAT_R64G64B64A64_SFLOAT:
+	case VK_FORMAT_EAC_R11_SNORM_BLOCK:
+	case VK_FORMAT_EAC_R11G11_SNORM_BLOCK:
+	case VK_FORMAT_ETC2_R8G8B8_SRGB_BLOCK:
+	case VK_FORMAT_ETC2_R8G8B8A1_SRGB_BLOCK:
+	case VK_FORMAT_ETC2_R8G8B8A8_SRGB_BLOCK:
+	// YCbCr formats treated as signed because VK_SAMPLER_YCBCR_MODEL_CONVERSION_YCBCR_IDENTITY
+	// expects chroma components to be in range [-0.5, 0.5]
+	case VK_FORMAT_G8_B8_R8_3PLANE_420_UNORM:
+	case VK_FORMAT_G8_B8R8_2PLANE_420_UNORM:
 		return false;
 	case VK_FORMAT_R8_SNORM:
 	case VK_FORMAT_R8_USCALED:
@@ -873,7 +1358,7 @@ bool Format::isUnsignedComponent(int component) const
 	case VK_FORMAT_R64G64B64_SFLOAT:
 		return component >= 3;
 	default:
-		ASSERT(false);
+		UNIMPLEMENTED("Format: %d", int(format));
 	}
 
 	return false;
@@ -1030,9 +1515,9 @@ int Format::bytes() const
 	case VK_FORMAT_X8_D24_UNORM_PACK32:       return 4;
 	case VK_FORMAT_D32_SFLOAT:                return 4;
 	case VK_FORMAT_S8_UINT:                   return 1;
-	case VK_FORMAT_D16_UNORM_S8_UINT:         return 2; // Separate depth and stencil planes
-	case VK_FORMAT_D24_UNORM_S8_UINT:         return 4; // Combined depth and stencil planes
-	case VK_FORMAT_D32_SFLOAT_S8_UINT:        return 4; // Separate depth and stencil planes
+	case VK_FORMAT_D16_UNORM_S8_UINT:         return 2; // Separate depth and stencil planes  // TODO: ASSERT to ensure this is only called per-aspect?
+	case VK_FORMAT_D24_UNORM_S8_UINT:         return 4; // Combined depth and stencil planes  // TODO: ASSERT to ensure this is only called per-aspect?
+	case VK_FORMAT_D32_SFLOAT_S8_UINT:        return 4; // Separate depth and stencil planes  // TODO: ASSERT to ensure this is only called per-aspect?
 	// Note: Compressed formats don't return bytes per pixel,
 	//       since these would be fractional. The returned value
 	//       is bytes per pixel for 1 column, so 2 for 64 bit 4x4
@@ -1090,10 +1575,15 @@ int Format::bytes() const
 	case VK_FORMAT_ASTC_12x10_UNORM_BLOCK:
 	case VK_FORMAT_ASTC_12x10_SRGB_BLOCK:
 	case VK_FORMAT_ASTC_12x12_UNORM_BLOCK:
-	case VK_FORMAT_ASTC_12x12_SRGB_BLOCK:     return 0; // FIXME
-	case VK_FORMAT_G8_B8R8_2PLANE_420_UNORM:  return 1; // Y plane only
+	case VK_FORMAT_ASTC_12x12_SRGB_BLOCK:
+		UNSUPPORTED("format: %d", int(format));
+		return 0;
+	case VK_FORMAT_G8_B8_R8_3PLANE_420_UNORM:
+	case VK_FORMAT_G8_B8R8_2PLANE_420_UNORM:
+		// TODO: ASSERT to ensure this is only called per-aspect?
+		return 1;  // Y plane only
 	default:
-		ASSERT(false);
+		UNIMPLEMENTED("Format: %d", int(format));
 	}
 
 	return 0;
@@ -1156,14 +1646,15 @@ int Format::pitchB(int width, int border, bool target) const
 	case VK_FORMAT_ASTC_12x12_UNORM_BLOCK:
 	case VK_FORMAT_ASTC_12x12_SRGB_BLOCK:
 		return 16 * ((width + 11) / 12);
+	case VK_FORMAT_G8_B8_R8_3PLANE_420_UNORM:
 	case VK_FORMAT_G8_B8R8_2PLANE_420_UNORM:
-		return sw::align<16>(width);
+		return sw::align<16>(width);  // Y plane only  // TODO: ASSERT to ensure this is only called per-aspect?
 	default:
 		return bytes() * width;
 	}
 }
 
-int Format::sliceB(int width, int height, int border, bool target) const
+int Format::sliceBUnpadded(int width, int height, int border, bool target) const
 {
 	height += 2 * border;
 
@@ -1219,9 +1710,18 @@ int Format::sliceB(int width, int height, int border, bool target) const
 	case VK_FORMAT_ASTC_12x12_UNORM_BLOCK:
 	case VK_FORMAT_ASTC_12x12_SRGB_BLOCK:
 		return pitchB(width, border, target) * ((height + 11) / 12);   // Pitch computed per 12 rows
+	case VK_FORMAT_G8_B8_R8_3PLANE_420_UNORM:
+	case VK_FORMAT_G8_B8R8_2PLANE_420_UNORM:
+		// "Images in this format must be defined with a width and height that is a multiple of two."
+		return pitchB(width, border, target) * (height + height / 2);  // U and V planes are 1/4 size of Y plane.
 	default:
 		return pitchB(width, border, target) * height;   // Pitch computed per row
 	}
+}
+
+int Format::sliceB(int width, int height, int border, bool target) const
+{
+	return sw::align<16>(sliceBUnpadded(width, height, border, target) + 15);
 }
 
 bool Format::getScale(sw::float4 &scale) const
@@ -1380,7 +1880,9 @@ bool Format::has16bitTextureFormat() const
 {
 	switch(format)
 	{
+	case VK_FORMAT_B4G4R4A4_UNORM_PACK16:
 	case VK_FORMAT_R5G6B5_UNORM_PACK16:
+	case VK_FORMAT_A1R5G5B5_UNORM_PACK16:
 		return true;
 	case VK_FORMAT_R8_SNORM:
 	case VK_FORMAT_R8G8_SNORM:
@@ -1398,25 +1900,42 @@ bool Format::has16bitTextureFormat() const
 	case VK_FORMAT_R32G32B32A32_SINT:
 	case VK_FORMAT_R32G32B32A32_UINT:
 	case VK_FORMAT_R8G8_UNORM:
+	case VK_FORMAT_R8G8_SRGB:
+	case VK_FORMAT_B8G8R8_UNORM:
 	case VK_FORMAT_B8G8R8A8_UNORM:
 	case VK_FORMAT_R8G8B8A8_UNORM:
+	case VK_FORMAT_B8G8R8_SRGB:
 	case VK_FORMAT_R8G8B8A8_SRGB:
+	case VK_FORMAT_B8G8R8A8_SRGB:
 	case VK_FORMAT_R32_SFLOAT:
 	case VK_FORMAT_R32G32_SFLOAT:
 	case VK_FORMAT_R32G32B32A32_SFLOAT:
 	case VK_FORMAT_R8_UNORM:
+	case VK_FORMAT_R16_UNORM:
+	case VK_FORMAT_R8_SRGB:
+	case VK_FORMAT_R16_SNORM:
 	case VK_FORMAT_R16G16_UNORM:
+	case VK_FORMAT_R16G16_SNORM:
 	case VK_FORMAT_R16G16B16A16_UNORM:
 	case VK_FORMAT_R16_SINT:
 	case VK_FORMAT_R16_UINT:
+	case VK_FORMAT_R16_SFLOAT:
 	case VK_FORMAT_R16G16_SINT:
 	case VK_FORMAT_R16G16_UINT:
+	case VK_FORMAT_R16G16_SFLOAT:
 	case VK_FORMAT_R16G16B16A16_SINT:
 	case VK_FORMAT_R16G16B16A16_UINT:
+	case VK_FORMAT_R16G16B16A16_SFLOAT:
+	case VK_FORMAT_G8_B8_R8_3PLANE_420_UNORM:
 	case VK_FORMAT_G8_B8R8_2PLANE_420_UNORM:
+	case VK_FORMAT_A2B10G10R10_UNORM_PACK32:
+	case VK_FORMAT_A2B10G10R10_UINT_PACK32:
+	case VK_FORMAT_E5B9G9R9_UFLOAT_PACK32:
+	case VK_FORMAT_B10G11R11_UFLOAT_PACK32:
+	case VK_FORMAT_D16_UNORM:
 		return false;
 	default:
-		ASSERT(false);
+		UNIMPLEMENTED("Format: %d", int(format));
 	}
 
 	return false;
@@ -1427,10 +1946,15 @@ bool Format::has8bitTextureComponents() const
 	switch(format)
 	{
 	case VK_FORMAT_R8G8_UNORM:
+	case VK_FORMAT_R8G8_SRGB:
+	case VK_FORMAT_B8G8R8_UNORM:
 	case VK_FORMAT_B8G8R8A8_UNORM:
 	case VK_FORMAT_R8G8B8A8_UNORM:
+	case VK_FORMAT_B8G8R8_SRGB:
 	case VK_FORMAT_R8G8B8A8_SRGB:
+	case VK_FORMAT_B8G8R8A8_SRGB:
 	case VK_FORMAT_R8_UNORM:
+	case VK_FORMAT_R8_SRGB:
 	case VK_FORMAT_R8_SNORM:
 	case VK_FORMAT_R8G8_SNORM:
 	case VK_FORMAT_R8G8B8A8_SNORM:
@@ -1441,11 +1965,16 @@ bool Format::has8bitTextureComponents() const
 	case VK_FORMAT_R8G8B8A8_SINT:
 	case VK_FORMAT_R8G8B8A8_UINT:
 		return true;
+	case VK_FORMAT_A1R5G5B5_UNORM_PACK16:
+	case VK_FORMAT_B4G4R4A4_UNORM_PACK16:
 	case VK_FORMAT_R5G6B5_UNORM_PACK16:
 	case VK_FORMAT_R32_SFLOAT:
 	case VK_FORMAT_R32G32_SFLOAT:
 	case VK_FORMAT_R32G32B32A32_SFLOAT:
+	case VK_FORMAT_R16_UNORM:
+	case VK_FORMAT_R16_SNORM:
 	case VK_FORMAT_R16G16_UNORM:
+	case VK_FORMAT_R16G16_SNORM:
 	case VK_FORMAT_R16G16B16A16_UNORM:
 	case VK_FORMAT_R32_SINT:
 	case VK_FORMAT_R32_UINT:
@@ -1455,14 +1984,23 @@ bool Format::has8bitTextureComponents() const
 	case VK_FORMAT_R32G32B32A32_UINT:
 	case VK_FORMAT_R16_SINT:
 	case VK_FORMAT_R16_UINT:
+	case VK_FORMAT_R16_SFLOAT:
 	case VK_FORMAT_R16G16_SINT:
 	case VK_FORMAT_R16G16_UINT:
+	case VK_FORMAT_R16G16_SFLOAT:
 	case VK_FORMAT_R16G16B16A16_SINT:
 	case VK_FORMAT_R16G16B16A16_UINT:
+	case VK_FORMAT_R16G16B16A16_SFLOAT:
+	case VK_FORMAT_G8_B8_R8_3PLANE_420_UNORM:
 	case VK_FORMAT_G8_B8R8_2PLANE_420_UNORM:
+	case VK_FORMAT_A2B10G10R10_UNORM_PACK32:
+	case VK_FORMAT_A2B10G10R10_UINT_PACK32:
+	case VK_FORMAT_E5B9G9R9_UFLOAT_PACK32:
+	case VK_FORMAT_B10G11R11_UFLOAT_PACK32:
+	case VK_FORMAT_D16_UNORM:
 		return false;
 	default:
-		ASSERT(false);
+		UNIMPLEMENTED("Format: %d", int(format));
 	}
 
 	return false;
@@ -1472,6 +2010,8 @@ bool Format::has16bitTextureComponents() const
 {
 	switch(format)
 	{
+	case VK_FORMAT_A1R5G5B5_UNORM_PACK16:
+	case VK_FORMAT_B4G4R4A4_UNORM_PACK16:
 	case VK_FORMAT_R5G6B5_UNORM_PACK16:
 	case VK_FORMAT_R8_SNORM:
 	case VK_FORMAT_R8G8_SNORM:
@@ -1489,26 +2029,43 @@ bool Format::has16bitTextureComponents() const
 	case VK_FORMAT_R32G32B32A32_SINT:
 	case VK_FORMAT_R32G32B32A32_UINT:
 	case VK_FORMAT_R8G8_UNORM:
+	case VK_FORMAT_R8G8_SRGB:
+	case VK_FORMAT_B8G8R8_UNORM:
 	case VK_FORMAT_B8G8R8A8_UNORM:
 	case VK_FORMAT_R8G8B8A8_UNORM:
+	case VK_FORMAT_B8G8R8_SRGB:
 	case VK_FORMAT_R8G8B8A8_SRGB:
+	case VK_FORMAT_B8G8R8A8_SRGB:
 	case VK_FORMAT_R32_SFLOAT:
 	case VK_FORMAT_R32G32_SFLOAT:
 	case VK_FORMAT_R32G32B32A32_SFLOAT:
 	case VK_FORMAT_R8_UNORM:
+	case VK_FORMAT_R8_SRGB:
+	case VK_FORMAT_G8_B8_R8_3PLANE_420_UNORM:
 	case VK_FORMAT_G8_B8R8_2PLANE_420_UNORM:
+	case VK_FORMAT_A2B10G10R10_UNORM_PACK32:
+	case VK_FORMAT_A2B10G10R10_UINT_PACK32:
+	case VK_FORMAT_E5B9G9R9_UFLOAT_PACK32:
+	case VK_FORMAT_B10G11R11_UFLOAT_PACK32:
 		return false;
+	case VK_FORMAT_R16_UNORM:
+	case VK_FORMAT_R16_SNORM:
 	case VK_FORMAT_R16G16_UNORM:
+	case VK_FORMAT_R16G16_SNORM:
 	case VK_FORMAT_R16G16B16A16_UNORM:
 	case VK_FORMAT_R16_SINT:
 	case VK_FORMAT_R16_UINT:
+	case VK_FORMAT_R16_SFLOAT:
 	case VK_FORMAT_R16G16_SINT:
 	case VK_FORMAT_R16G16_UINT:
+	case VK_FORMAT_R16G16_SFLOAT:
 	case VK_FORMAT_R16G16B16A16_SINT:
 	case VK_FORMAT_R16G16B16A16_UINT:
+	case VK_FORMAT_R16G16B16A16_SFLOAT:
+	case VK_FORMAT_D16_UNORM:
 		return true;
 	default:
-		ASSERT(false);
+		UNIMPLEMENTED("Format: %d", int(format));
 	}
 
 	return false;
@@ -1518,6 +2075,8 @@ bool Format::has32bitIntegerTextureComponents() const
 {
 	switch(format)
 	{
+	case VK_FORMAT_A1R5G5B5_UNORM_PACK16:
+	case VK_FORMAT_B4G4R4A4_UNORM_PACK16:
 	case VK_FORMAT_R5G6B5_UNORM_PACK16:
 	case VK_FORMAT_R8_SNORM:
 	case VK_FORMAT_R8G8_SNORM:
@@ -1529,22 +2088,39 @@ bool Format::has32bitIntegerTextureComponents() const
 	case VK_FORMAT_R8G8B8A8_SINT:
 	case VK_FORMAT_R8G8B8A8_UINT:
 	case VK_FORMAT_R8G8_UNORM:
+	case VK_FORMAT_R8G8_SRGB:
+	case VK_FORMAT_B8G8R8_UNORM:
 	case VK_FORMAT_B8G8R8A8_UNORM:
 	case VK_FORMAT_R8G8B8A8_UNORM:
+	case VK_FORMAT_B8G8R8_SRGB:
 	case VK_FORMAT_R8G8B8A8_SRGB:
+	case VK_FORMAT_B8G8R8A8_SRGB:
+	case VK_FORMAT_R16_UNORM:
+	case VK_FORMAT_R16_SNORM:
 	case VK_FORMAT_R16G16_UNORM:
+	case VK_FORMAT_R16G16_SNORM:
 	case VK_FORMAT_R16G16B16A16_UNORM:
 	case VK_FORMAT_R16_SINT:
 	case VK_FORMAT_R16_UINT:
+	case VK_FORMAT_R16_SFLOAT:
 	case VK_FORMAT_R16G16_SINT:
 	case VK_FORMAT_R16G16_UINT:
+	case VK_FORMAT_R16G16_SFLOAT:
 	case VK_FORMAT_R16G16B16A16_SINT:
 	case VK_FORMAT_R16G16B16A16_UINT:
+	case VK_FORMAT_R16G16B16A16_SFLOAT:
 	case VK_FORMAT_R32_SFLOAT:
 	case VK_FORMAT_R32G32_SFLOAT:
 	case VK_FORMAT_R32G32B32A32_SFLOAT:
 	case VK_FORMAT_R8_UNORM:
+	case VK_FORMAT_R8_SRGB:
+	case VK_FORMAT_G8_B8_R8_3PLANE_420_UNORM:
 	case VK_FORMAT_G8_B8R8_2PLANE_420_UNORM:
+	case VK_FORMAT_A2B10G10R10_UNORM_PACK32:
+	case VK_FORMAT_A2B10G10R10_UINT_PACK32:
+	case VK_FORMAT_E5B9G9R9_UFLOAT_PACK32:
+	case VK_FORMAT_B10G11R11_UFLOAT_PACK32:
+	case VK_FORMAT_D16_UNORM:
 		return false;
 	case VK_FORMAT_R32_SINT:
 	case VK_FORMAT_R32_UINT:
@@ -1554,53 +2130,7 @@ bool Format::has32bitIntegerTextureComponents() const
 	case VK_FORMAT_R32G32B32A32_UINT:
 		return true;
 	default:
-		ASSERT(false);
-	}
-
-	return false;
-}
-
-bool Format::hasYuvFormat() const
-{
-	switch(format)
-	{
-	case VK_FORMAT_G8_B8R8_2PLANE_420_UNORM:
-		return true;
-	case VK_FORMAT_R5G6B5_UNORM_PACK16:
-	case VK_FORMAT_R8_SNORM:
-	case VK_FORMAT_R8G8_SNORM:
-	case VK_FORMAT_R8G8B8A8_SNORM:
-	case VK_FORMAT_R8_SINT:
-	case VK_FORMAT_R8_UINT:
-	case VK_FORMAT_R8G8_SINT:
-	case VK_FORMAT_R8G8_UINT:
-	case VK_FORMAT_R8G8B8A8_SINT:
-	case VK_FORMAT_R8G8B8A8_UINT:
-	case VK_FORMAT_R32_SINT:
-	case VK_FORMAT_R32_UINT:
-	case VK_FORMAT_R32G32_SINT:
-	case VK_FORMAT_R32G32_UINT:
-	case VK_FORMAT_R32G32B32A32_SINT:
-	case VK_FORMAT_R32G32B32A32_UINT:
-	case VK_FORMAT_R8G8_UNORM:
-	case VK_FORMAT_B8G8R8A8_UNORM:
-	case VK_FORMAT_R8G8B8A8_UNORM:
-	case VK_FORMAT_R8G8B8A8_SRGB:
-	case VK_FORMAT_R32_SFLOAT:
-	case VK_FORMAT_R32G32_SFLOAT:
-	case VK_FORMAT_R32G32B32A32_SFLOAT:
-	case VK_FORMAT_R8_UNORM:
-	case VK_FORMAT_R16G16_UNORM:
-	case VK_FORMAT_R16G16B16A16_UNORM:
-	case VK_FORMAT_R16_SINT:
-	case VK_FORMAT_R16_UINT:
-	case VK_FORMAT_R16G16_SINT:
-	case VK_FORMAT_R16G16_UINT:
-	case VK_FORMAT_R16G16B16A16_SINT:
-	case VK_FORMAT_R16G16B16A16_UINT:
-		return false;
-	default:
-		ASSERT(false);
+		UNIMPLEMENTED("Format: %d", int(format));
 	}
 
 	return false;
@@ -1612,42 +2142,61 @@ bool Format::isRGBComponent(int component) const
 	{
 	case VK_FORMAT_R8_SNORM:
 	case VK_FORMAT_R8_UNORM:
+	case VK_FORMAT_R8_SRGB:
 	case VK_FORMAT_R8_SINT:
 	case VK_FORMAT_R8_UINT:
+	case VK_FORMAT_R16_UNORM:
+	case VK_FORMAT_R16_SNORM:
 	case VK_FORMAT_R16_SINT:
 	case VK_FORMAT_R16_UINT:
+	case VK_FORMAT_R16_SFLOAT:
 	case VK_FORMAT_R32_SINT:
 	case VK_FORMAT_R32_UINT:
 	case VK_FORMAT_R32_SFLOAT:
 		return component < 1;
 	case VK_FORMAT_R8G8_SNORM:
 	case VK_FORMAT_R8G8_UNORM:
+	case VK_FORMAT_R8G8_SRGB:
 	case VK_FORMAT_R8G8_SINT:
 	case VK_FORMAT_R8G8_UINT:
 	case VK_FORMAT_R16G16_SINT:
 	case VK_FORMAT_R16G16_UINT:
+	case VK_FORMAT_R16G16_SNORM:
 	case VK_FORMAT_R16G16_UNORM:
+	case VK_FORMAT_R16G16_SFLOAT:
 	case VK_FORMAT_R32G32_SINT:
 	case VK_FORMAT_R32G32_UINT:
 	case VK_FORMAT_R32G32_SFLOAT:
 		return component < 2;
+	case VK_FORMAT_A1R5G5B5_UNORM_PACK16:
+	case VK_FORMAT_B4G4R4A4_UNORM_PACK16:
 	case VK_FORMAT_R5G6B5_UNORM_PACK16:
+	case VK_FORMAT_B8G8R8_UNORM:
+	case VK_FORMAT_B8G8R8_SRGB:
 	case VK_FORMAT_R8G8B8A8_SNORM:
 	case VK_FORMAT_R8G8B8A8_UNORM:
 	case VK_FORMAT_R8G8B8A8_SINT:
 	case VK_FORMAT_R8G8B8A8_UINT:
 	case VK_FORMAT_B8G8R8A8_UNORM:
 	case VK_FORMAT_R8G8B8A8_SRGB:
+	case VK_FORMAT_B8G8R8A8_SRGB:
 	case VK_FORMAT_R16G16B16A16_UNORM:
 	case VK_FORMAT_R16G16B16A16_SINT:
 	case VK_FORMAT_R16G16B16A16_UINT:
+	case VK_FORMAT_R16G16B16A16_SFLOAT:
 	case VK_FORMAT_R32G32B32A32_SINT:
 	case VK_FORMAT_R32G32B32A32_UINT:
 	case VK_FORMAT_R32G32B32A32_SFLOAT:
+	case VK_FORMAT_G8_B8_R8_3PLANE_420_UNORM:
 	case VK_FORMAT_G8_B8R8_2PLANE_420_UNORM:
+	case VK_FORMAT_E5B9G9R9_UFLOAT_PACK32:
+	case VK_FORMAT_B10G11R11_UFLOAT_PACK32:
 		return component < 3;
+	case VK_FORMAT_D32_SFLOAT:
+	case VK_FORMAT_D16_UNORM:
+		return false;
 	default:
-		ASSERT(false);
+		UNIMPLEMENTED("Format: %d", int(format));
 	}
 
 	return false;

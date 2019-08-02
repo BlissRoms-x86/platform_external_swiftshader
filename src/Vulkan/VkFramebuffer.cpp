@@ -27,7 +27,7 @@ Framebuffer::Framebuffer(const VkFramebufferCreateInfo* pCreateInfo, void* mem) 
 {
 	for(uint32_t i = 0; i < attachmentCount; i++)
 	{
-		attachments[i] = Cast(pCreateInfo->pAttachments[i]);
+		attachments[i] = vk::Cast(pCreateInfo->pAttachments[i]);
 	}
 }
 
@@ -43,6 +43,11 @@ void Framebuffer::clear(const RenderPass* renderPass, uint32_t clearValueCount, 
 	const uint32_t count = std::min(clearValueCount, attachmentCount);
 	for(uint32_t i = 0; i < count; i++)
 	{
+		if (!renderPass->isAttachmentUsed(i))
+		{
+			continue;
+		}
+
 		const VkAttachmentDescription attachment = renderPass->getAttachment(i);
 		const Format format(attachment.format);
 		bool isDepth = format.isDepth();

@@ -62,10 +62,12 @@
       <IntrinsicFunctions>true</IntrinsicFunctions>
       <SDLCheck>true</SDLCheck>
       <AdditionalIncludeDirectories>$(SolutionDir)include;$(SolutionDir)third_party\SPIRV-Headers\include;$(SolutionDir)third_party\SPIRV-Tools\include;$(SolutionDir)src;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
-      <PreprocessorDefinitions>NDEBUG;_WINDOWS;_USRDLL;_CRT_SECURE_NO_DEPRECATE;NOMINMAX;_SECURE_SCL=0;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <PreprocessorDefinitions>VK_EXPORT=;NDEBUG;_WINDOWS;_USRDLL;_CRT_SECURE_NO_DEPRECATE;NOMINMAX;_SECURE_SCL=0;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <RuntimeLibrary>MultiThreaded</RuntimeLibrary>
       <AdditionalOptions>/permissive- %(AdditionalOptions)</AdditionalOptions>
       <TreatSpecificWarningsAsErrors>4018;5038;4838</TreatSpecificWarningsAsErrors>
+      <MultiProcessorCompilation>true</MultiProcessorCompilation>
+      <DisableSpecificWarnings>4267</DisableSpecificWarnings>
     </ClCompile>
     <Link>
       <EnableCOMDATFolding>true</EnableCOMDATFolding>
@@ -87,10 +89,12 @@ IF EXIST "$(SolutionDir)..\deqp\build\external\vulkancts\modules\vulkan\" (copy 
       <Optimization>Disabled</Optimization>
       <SDLCheck>true</SDLCheck>
       <AdditionalIncludeDirectories>$(SolutionDir)include;$(SolutionDir)third_party\SPIRV-Headers\include;$(SolutionDir)third_party\SPIRV-Tools\include;$(SolutionDir)src;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
-      <PreprocessorDefinitions>_DEBUG;_WINDOWS;_USRDLL;_CRT_SECURE_NO_DEPRECATE;NOMINMAX;DEBUGGER_WAIT_DIALOG;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <PreprocessorDefinitions>VK_EXPORT=;_DEBUG;_WINDOWS;_USRDLL;_CRT_SECURE_NO_DEPRECATE;NOMINMAX;DEBUGGER_WAIT_DIALOG;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <RuntimeLibrary>MultiThreadedDebug</RuntimeLibrary>
       <AdditionalOptions>/permissive- %(AdditionalOptions)</AdditionalOptions>
       <TreatSpecificWarningsAsErrors>4018;5038;4838</TreatSpecificWarningsAsErrors>
+      <MultiProcessorCompilation>true</MultiProcessorCompilation>
+      <DisableSpecificWarnings>4267</DisableSpecificWarnings>
     </ClCompile>
     <Link>
       <ModuleDefinitionFile>libvk_swiftshader.def</ModuleDefinitionFile>
@@ -108,6 +112,7 @@ IF EXIST "$(SolutionDir)..\deqp\build\external\vulkancts\modules\vulkan\" (copy 
     <ClCompile Include="libVulkan.cpp" />
     <ClCompile Include="main.cpp" />
     <ClCompile Include="VkBuffer.cpp" />
+    <ClCompile Include="VkBufferView.cpp" />
     <ClCompile Include="VkCommandBuffer.cpp" />
     <ClCompile Include="VkCommandPool.cpp" />
     <ClCompile Include="VkDebug.cpp" />
@@ -125,11 +130,13 @@ IF EXIST "$(SolutionDir)..\deqp\build\external\vulkancts\modules\vulkan\" (copy 
     <ClCompile Include="VkMemory.cpp" />
     <ClCompile Include="VkPhysicalDevice.cpp" />
     <ClCompile Include="VkPipeline.cpp" />
+    <ClCompile Include="VkPipelineCache.cpp" />
     <ClCompile Include="VkPipelineLayout.cpp" />
     <ClCompile Include="VkPromotedExtensions.cpp" />
     <ClCompile Include="VkQueryPool.cpp" />
     <ClCompile Include="VkQueue.cpp" />
     <ClCompile Include="VkRenderPass.cpp" />
+    <ClCompile Include="VkSampler.cpp" />
     <ClCompile Include="VkShaderModule.cpp" />
     <ClCompile Include="..\Device\Blitter.cpp" />
     <ClCompile Include="..\Device\Clipper.cpp" />
@@ -143,9 +150,7 @@ IF EXIST "$(SolutionDir)..\deqp\build\external\vulkancts\modules\vulkan\" (copy 
     <ClCompile Include="..\Device\Point.cpp" />
     <ClCompile Include="..\Device\QuadRasterizer.cpp" />
     <ClCompile Include="..\Device\Renderer.cpp" />
-    <ClCompile Include="..\Device\Sampler.cpp" />
     <ClCompile Include="..\Device\SetupProcessor.cpp" />
-    <ClCompile Include="..\Device\SwiftConfig.cpp" />
     <ClCompile Include="..\Device\Vector.cpp" />
     <ClCompile Include="..\Device\VertexProcessor.cpp" />
     <ClCompile Include="..\Pipeline\ComputeProgram.cpp" />
@@ -156,6 +161,7 @@ IF EXIST "$(SolutionDir)..\deqp\build\external\vulkancts\modules\vulkan\" (copy 
     <ClCompile Include="..\Pipeline\SetupRoutine.cpp" />
     <ClCompile Include="..\Pipeline\ShaderCore.cpp" />
     <ClCompile Include="..\Pipeline\SpirvShader.cpp" />
+    <ClCompile Include="..\Pipeline\SpirvShaderSampling.cpp" />
     <ClCompile Include="..\Pipeline\SpirvShader_dbg.cpp" />
     <ClCompile Include="..\Pipeline\VertexProgram.cpp" />
     <ClCompile Include="..\Pipeline\VertexRoutine.cpp" />
@@ -173,9 +179,7 @@ IF EXIST "$(SolutionDir)..\deqp\build\external\vulkancts\modules\vulkan\" (copy 
     <ClCompile Include="..\System\Half.cpp" />
     <ClCompile Include="..\System\Math.cpp" />
     <ClCompile Include="..\System\Memory.cpp" />
-    <ClCompile Include="..\System\Resource.cpp" />
     <ClCompile Include="..\System\Socket.cpp" />
-    <ClCompile Include="..\System\Thread.cpp" />
     <ClCompile Include="..\System\Timer.cpp" />
     <ClCompile Include="..\WSI\VkSurfaceKHR.cpp" />
     <ClCompile Include="..\WSI\VkSwapchainKHR.cpp" />
@@ -219,6 +223,7 @@ IF EXIST "$(SolutionDir)..\deqp\build\external\vulkancts\modules\vulkan\" (copy 
     <ClInclude Include="VkSampler.hpp" />
     <ClInclude Include="VkSemaphore.hpp" />
     <ClInclude Include="VkShaderModule.hpp" />
+    <ClInclude Include="VulkanPlatform.h" />
     <ClInclude Include="..\Device\Blitter.hpp" />
     <ClInclude Include="..\Device\Clipper.hpp" />
     <ClInclude Include="..\Device\Color.hpp" />
@@ -239,7 +244,6 @@ IF EXIST "$(SolutionDir)..\deqp\build\external\vulkancts\modules\vulkan\" (copy 
     <ClInclude Include="..\Device\Sampler.hpp" />
     <ClInclude Include="..\Device\SetupProcessor.hpp" />
     <ClInclude Include="..\Device\Stream.hpp" />
-    <ClInclude Include="..\Device\SwiftConfig.hpp" />
     <ClInclude Include="..\Device\Triangle.hpp" />
     <ClInclude Include="..\Device\Vector.hpp" />
     <ClInclude Include="..\Device\Vertex.hpp" />
@@ -269,11 +273,9 @@ IF EXIST "$(SolutionDir)..\deqp\build\external\vulkancts\modules\vulkan\" (copy 
     <ClInclude Include="..\System\Half.hpp" />
     <ClInclude Include="..\System\Math.hpp" />
     <ClInclude Include="..\System\Memory.hpp" />
-    <ClInclude Include="..\System\MutexLock.hpp" />
-    <ClInclude Include="..\System\Resource.hpp" />
     <ClInclude Include="..\System\SharedLibrary.hpp" />
     <ClInclude Include="..\System\Socket.hpp" />
-    <ClInclude Include="..\System\Thread.hpp" />
+    <ClInclude Include="..\System\Synchronization.hpp" />
     <ClInclude Include="..\System\Timer.hpp" />
     <ClInclude Include="..\System\Types.hpp" />
     <ClInclude Include="..\WSI\VkSurfaceKHR.hpp" />
@@ -291,10 +293,10 @@ IF EXIST "$(SolutionDir)..\deqp\build\external\vulkancts\modules\vulkan\" (copy 
   </ItemGroup>
   <ItemGroup>
     <ProjectReference Include="..\..\build\Visual Studio 15 2017 Win64\third_party\SPIRV-Tools\source\opt\SPIRV-Tools-opt.vcxproj">
-      <Project>{ce414127-5528-30f5-9f5f-5af9d2b8c04c}</Project>
+      <Project>{eff5de98-2741-3bd8-b049-d5647a223b5e}</Project>
     </ProjectReference>
     <ProjectReference Include="..\..\build\Visual Studio 15 2017 Win64\third_party\SPIRV-Tools\source\SPIRV-Tools.vcxproj">
-      <Project>{83d86993-70d0-336a-84f1-8b952b8079dd}</Project>
+      <Project>{59349deb-ac96-335c-acc6-8a92f774538a}</Project>
     </ProjectReference>
     <ProjectReference Include="..\Reactor\Reactor.vcxproj">
       <Project>{28fd076d-10b5-4bd8-a4cf-f44c7002a803}</Project>

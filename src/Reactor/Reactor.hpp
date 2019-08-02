@@ -17,6 +17,7 @@
 
 #include "Nucleus.hpp"
 #include "Routine.hpp"
+#include "Traits.hpp"
 
 #include <cassert>
 #include <cstddef>
@@ -28,12 +29,40 @@
 
 #undef Bool // b/127920555
 
-#if !defined(NDEBUG) && (REACTOR_LLVM_VERSION >= 7)
+#if !defined(NDEBUG)
 #define ENABLE_RR_PRINT 1 // Enables RR_PRINT(), RR_WATCH()
-#endif // !defined(NDEBUG) && (REACTOR_LLVM_VERSION >= 7)
+#endif // !defined(NDEBUG)
+
+#ifdef ENABLE_RR_DEBUG_INFO
+	// Functions used for generating JIT debug info.
+	// See docs/ReactorDebugInfo.md for more information.
+	namespace rr
+	{
+		// Update the current source location for debug.
+		void EmitDebugLocation();
+		// Bind value to its symbolic name taken from the backtrace.
+		void EmitDebugVariable(class Value* value);
+		// Flush any pending variable bindings before the line ends.
+		void FlushDebug();
+	}
+	#define RR_DEBUG_INFO_UPDATE_LOC()    rr::EmitDebugLocation()
+	#define RR_DEBUG_INFO_EMIT_VAR(value) rr::EmitDebugVariable(value)
+	#define RR_DEBUG_INFO_FLUSH()         rr::FlushDebug()
+#else
+	#define RR_DEBUG_INFO_UPDATE_LOC()
+	#define RR_DEBUG_INFO_EMIT_VAR(value)
+	#define RR_DEBUG_INFO_FLUSH()
+#endif // ENABLE_RR_DEBUG_INFO
 
 namespace rr
 {
+	struct Capabilities
+	{
+		bool CallSupported;       // Support for rr::Call()
+		bool CoroutinesSupported; // Support for rr::Coroutine<F>
+	};
+	extern const Capabilities Caps;
+
 	class Bool;
 	class Byte;
 	class SByte;
@@ -103,6 +132,8 @@ namespace rr
 
 		~Variable();
 
+		const int arraySize;
+
 	private:
 		static void materializeAll();
 		static void killUnmaterialized();
@@ -110,7 +141,6 @@ namespace rr
 		static std::unordered_set<Variable*> unmaterializedVariables;
 
 		Type *const type;
-		const int arraySize;
 		mutable Value *rvalue = nullptr;
 		mutable Value *address = nullptr;
 	};
@@ -133,6 +163,8 @@ namespace rr
 	class Reference
 	{
 	public:
+		using reference_underlying_type = T;
+
 		explicit Reference(Value *pointer, int alignment = 1);
 
 		RValue<T> operator=(RValue<T> rhs) const;
@@ -203,7 +235,13 @@ namespace rr
 	class RValue
 	{
 	public:
+		using rvalue_underlying_type = T;
+
 		explicit RValue(Value *rvalue);
+
+#ifdef ENABLE_RR_DEBUG_INFO
+		RValue(const RValue<T> &rvalue);
+#endif // ENABLE_RR_DEBUG_INFO
 
 		RValue(const T &lvalue);
 		RValue(typename BoolLiteral<T>::type i);
@@ -1236,6 +1274,19 @@ namespace rr
 	RValue<UInt> Max(RValue<UInt> x, RValue<UInt> y);
 	RValue<UInt> Min(RValue<UInt> x, RValue<UInt> y);
 	RValue<UInt> Clamp(RValue<UInt> x, RValue<UInt> min, RValue<UInt> max);
+
+	RValue<UInt> AddAtomic(RValue<Pointer<UInt>> x, RValue<UInt> y, std::memory_order memoryOrder);
+	RValue<UInt> SubAtomic(RValue<Pointer<UInt>> x, RValue<UInt> y, std::memory_order memoryOrder);
+	RValue<UInt> AndAtomic(RValue<Pointer<UInt>> x, RValue<UInt> y, std::memory_order memoryOrder);
+	RValue<UInt> OrAtomic(RValue<Pointer<UInt>> x, RValue<UInt> y, std::memory_order memoryOrder);
+	RValue<UInt> XorAtomic(RValue<Pointer<UInt>> x, RValue<UInt> y, std::memory_order memoryOrder);
+	RValue<Int> MinAtomic(RValue<Pointer<Int>> x, RValue<Int> y, std::memory_order memoryOrder);
+	RValue<Int> MaxAtomic(RValue<Pointer<Int>> x, RValue<Int> y, std::memory_order memoryOrder);
+	RValue<UInt> MinAtomic(RValue<Pointer<UInt>> x, RValue<UInt> y, std::memory_order memoryOrder);
+	RValue<UInt> MaxAtomic(RValue<Pointer<UInt>> x, RValue<UInt> y, std::memory_order memoryOrder);
+	RValue<UInt> ExchangeAtomic(RValue<Pointer<UInt>> x, RValue<UInt> y, std::memory_order memoryOrder);
+	RValue<UInt> CompareExchangeAtomic(RValue<Pointer<UInt>> x, RValue<UInt> y, RValue<UInt> compare, std::memory_order memoryOrderEqual, std::memory_order memoryOrderUnequal);
+
 //	RValue<UInt> RoundUInt(RValue<Float> cast);
 
 	class Int2 : public LValue<Int2>
@@ -1349,6 +1400,8 @@ namespace rr
 //	RValue<Bool> operator==(RValue<UInt2> lhs, RValue<UInt2> rhs);
 
 //	RValue<UInt2> RoundInt(RValue<Float4> cast);
+	RValue<UInt> Extract(RValue<UInt2> val, int i);
+	RValue<UInt2> Insert(RValue<UInt2> val, RValue<UInt> element, int i);
 
 	template<class T>
 	struct Scalar;
@@ -1423,7 +1476,7 @@ namespace rr
 		RValue<Vector4> operator=(RValue<typename Scalar<Vector4>::Type> rhs);
 
 	private:
-		Float4 *parent;
+		Vector4 *parent;
 	};
 
 	template<class Vector4, int T>
@@ -1914,6 +1967,9 @@ namespace rr
 		UInt4(const Int4 &rhs);
 		UInt4(const Reference<Int4> &rhs);
 		UInt4(RValue<UInt2> lo, RValue<UInt2> hi);
+		UInt4(RValue<UInt> rhs);
+		UInt4(const UInt &rhs);
+		UInt4(const Reference<UInt> &rhs);
 
 		RValue<UInt4> operator=(RValue<UInt4> rhs);
 		RValue<UInt4> operator=(const UInt4 &rhs);
@@ -1972,7 +2028,10 @@ namespace rr
 	RValue<UInt4> Max(RValue<UInt4> x, RValue<UInt4> y);
 	RValue<UInt4> Min(RValue<UInt4> x, RValue<UInt4> y);
 	RValue<UInt4> MulHigh(RValue<UInt4> x, RValue<UInt4> y);
+	RValue<UInt> Extract(RValue<UInt4> val, int i);
+	RValue<UInt4> Insert(RValue<UInt4> val, RValue<UInt> element, int i);
 //	RValue<UInt4> RoundInt(RValue<Float4> cast);
+	RValue<UInt4> Swizzle(RValue<UInt4> x, unsigned char select);
 
 	class Half : public LValue<Half>
 	{
@@ -2204,6 +2263,43 @@ namespace rr
 	RValue<Float4> Floor(RValue<Float4> x);
 	RValue<Float4> Ceil(RValue<Float4> x);
 
+	// Trigonometric functions
+	// TODO: Currentlhy unimplemented for Subzero.
+	RValue<Float4> Sin(RValue<Float4> x);
+	RValue<Float4> Cos(RValue<Float4> x);
+	RValue<Float4> Tan(RValue<Float4> x);
+	RValue<Float4> Asin(RValue<Float4> x);
+	RValue<Float4> Acos(RValue<Float4> x);
+	RValue<Float4> Atan(RValue<Float4> x);
+	RValue<Float4> Sinh(RValue<Float4> x);
+	RValue<Float4> Cosh(RValue<Float4> x);
+	RValue<Float4> Tanh(RValue<Float4> x);
+	RValue<Float4> Asinh(RValue<Float4> x);
+	RValue<Float4> Acosh(RValue<Float4> x);
+	RValue<Float4> Atanh(RValue<Float4> x);
+	RValue<Float4> Atan2(RValue<Float4> x, RValue<Float4> y);
+
+	// Exponential functions
+	// TODO: Currentlhy unimplemented for Subzero.
+	RValue<Float4> Pow(RValue<Float4> x, RValue<Float4> y);
+	RValue<Float4> Exp(RValue<Float4> x);
+	RValue<Float4> Log(RValue<Float4> x);
+	RValue<Float4> Exp2(RValue<Float4> x);
+	RValue<Float4> Log2(RValue<Float4> x);
+
+	// Bit Manipulation functions.
+	// TODO: Currentlhy unimplemented for Subzero.
+
+	// Count leading zeros.
+	// Returns 32 when: isZeroUndef && x == 0.
+	// Returns an undefined value when: !isZeroUndef && x == 0.
+	RValue<UInt4> Ctlz(RValue<UInt4> x, bool isZeroUndef);
+
+	// Count trailing zeros.
+	// Returns 32 when: isZeroUndef && x == 0.
+	// Returns an undefined value when: !isZeroUndef && x == 0.
+	RValue<UInt4> Cttz(RValue<UInt4> x, bool isZeroUndef);
+
 	template<class T>
 	class Pointer : public LValue<Pointer<T>>
 	{
@@ -2229,10 +2325,12 @@ namespace rr
 		Pointer(RValue<Pointer<T>> rhs);
 		Pointer(const Pointer<T> &rhs);
 		Pointer(const Reference<Pointer<T>> &rhs);
+		Pointer(std::nullptr_t);
 
 		RValue<Pointer<T>> operator=(RValue<Pointer<T>> rhs);
 		RValue<Pointer<T>> operator=(const Pointer<T> &rhs);
 		RValue<Pointer<T>> operator=(const Reference<Pointer<T>> &rhs);
+		RValue<Pointer<T>> operator=(std::nullptr_t);
 
 		Reference<T> operator*();
 		Reference<T> operator[](int index);
@@ -2260,6 +2358,12 @@ namespace rr
 	RValue<Pointer<Byte>> operator-=(Pointer<Byte> &lhs, RValue<Int> offset);
 	RValue<Pointer<Byte>> operator-=(Pointer<Byte> &lhs, RValue<UInt> offset);
 
+	template <typename T>
+	RValue<Bool> operator==(const Pointer<T> &lhs, const Pointer<T> &rhs)
+	{
+		return RValue<Bool>(Nucleus::createPtrEQ(lhs.loadValue(), rhs.loadValue()));
+	}
+
 	template<typename T>
 	RValue<T> Load(RValue<Pointer<T>> pointer, unsigned int alignment, bool atomic, std::memory_order memoryOrder)
 	{
@@ -2267,10 +2371,45 @@ namespace rr
 	}
 
 	template<typename T>
+	RValue<T> Load(Pointer<T> pointer, unsigned int alignment, bool atomic, std::memory_order memoryOrder)
+	{
+		return Load(RValue<Pointer<T>>(pointer), alignment, atomic, memoryOrder);
+	}
+
+	// TODO: Use SIMD to template these.
+	RValue<Float4> MaskedLoad(RValue<Pointer<Float4>> base, RValue<Int4> mask, unsigned int alignment, bool zeroMaskedLanes = false);
+	RValue<Int4> MaskedLoad(RValue<Pointer<Int4>> base, RValue<Int4> mask, unsigned int alignment, bool zeroMaskedLanes = false);
+	void MaskedStore(RValue<Pointer<Float4>> base, RValue<Float4> val, RValue<Int4> mask, unsigned int alignment);
+	void MaskedStore(RValue<Pointer<Int4>> base, RValue<Int4> val, RValue<Int4> mask, unsigned int alignment);
+
+	RValue<Float4> Gather(RValue<Pointer<Float>> base, RValue<Int4> offsets, RValue<Int4> mask, unsigned int alignment, bool zeroMaskedLanes = false);
+	RValue<Int4> Gather(RValue<Pointer<Int>> base, RValue<Int4> offsets, RValue<Int4> mask, unsigned int alignment, bool zeroMaskedLanes = false);
+	void Scatter(RValue<Pointer<Float>> base, RValue<Float4> val, RValue<Int4> offsets, RValue<Int4> mask, unsigned int alignment);
+	void Scatter(RValue<Pointer<Int>> base, RValue<Int4> val, RValue<Int4> offsets, RValue<Int4> mask, unsigned int alignment);
+
+	template<typename T>
 	void Store(RValue<T> value, RValue<Pointer<T>> pointer, unsigned int alignment, bool atomic, std::memory_order memoryOrder)
 	{
 		Nucleus::createStore(value.value, pointer.value, T::getType(), false, alignment, atomic, memoryOrder);
 	}
+
+	template<typename T>
+	void Store(RValue<T> value, Pointer<T> pointer, unsigned int alignment, bool atomic, std::memory_order memoryOrder)
+	{
+		Store(value, RValue<Pointer<T>>(pointer), alignment, atomic, memoryOrder);
+	}
+
+	template<typename T>
+	void Store(T value, Pointer<T> pointer, unsigned int alignment, bool atomic, std::memory_order memoryOrder)
+	{
+		Store(RValue<T>(value), RValue<Pointer<T>>(pointer), alignment, atomic, memoryOrder);
+	}
+
+	// Fence adds a memory barrier that enforces ordering constraints on memory
+	// operations. memoryOrder can only be one of:
+	// std::memory_order_acquire, std::memory_order_release,
+	// std::memory_order_acq_rel, or std::memory_order_seq_cst.
+	void Fence(std::memory_order memoryOrder);
 
 	template<class T, int S = 1>
 	class Array : public LValue<T>
@@ -2291,14 +2430,24 @@ namespace rr
 
 	void branch(RValue<Bool> cmp, BasicBlock *bodyBB, BasicBlock *endBB);
 
+	// ValueOf returns a rr::Value* for the given C-type, RValue<T>, LValue<T>
+	// or Reference<T>.
+	template <typename T>
+	inline Value* ValueOf(const T &v)
+	{
+		return ReactorType<T>(v).loadValue();
+	}
+
 	void Return();
-	void Return(RValue<Int> ret);
 
 	template<class T>
-	void Return(const Pointer<T> &ret);
-
-	template<class T>
-	void Return(RValue<Pointer<T>> ret);
+	void Return(const T &ret)
+	{
+		static_assert(CanBeUsedAsReturn< ReactorType<T> >::value, "Unsupported type for Return()");
+		Nucleus::createRet(ValueOf<T>(ret));
+		// Place any unreachable instructions in an unreferenced block.
+		Nucleus::setInsertBlock(Nucleus::createBasicBlock());
+	}
 
 	// Generic template, leave undefined!
 	template<typename FunctionType>
@@ -2308,6 +2457,9 @@ namespace rr
 	template<typename Return, typename... Arguments>
 	class Function<Return(Arguments...)>
 	{
+		// Static assert that the function signature is valid.
+		static_assert(sizeof(AssertFunctionSignatureIsValid<Return(Arguments...)>) >= 0, "Invalid function signature");
+
 	public:
 		Function();
 
@@ -2320,7 +2472,8 @@ namespace rr
 			return Argument<typename std::tuple_element<index, std::tuple<Arguments...>>::type>(arg);
 		}
 
-		Routine *operator()(const char *name, ...);
+		std::shared_ptr<Routine> operator()(const char *name, ...);
+		std::shared_ptr<Routine> operator()(const Config::Edit &cfg, const char *name, ...);
 
 	protected:
 		Nucleus *core;
@@ -2340,6 +2493,9 @@ namespace rr
 	template<class T>
 	LValue<T>::LValue(int arraySize) : Variable(T::getType(), arraySize)
 	{
+#ifdef ENABLE_RR_DEBUG_INFO
+		materialize();
+#endif // ENABLE_RR_DEBUG_INFO
 	}
 
 	inline void Variable::materialize() const
@@ -2347,6 +2503,7 @@ namespace rr
 		if(!address)
 		{
 			address = Nucleus::allocateStackVariable(type, arraySize);
+			RR_DEBUG_INFO_EMIT_VAR(address);
 
 			if(rvalue)
 			{
@@ -2443,47 +2600,62 @@ namespace rr
 		return alignment;
 	}
 
+#ifdef ENABLE_RR_DEBUG_INFO
+	template<class T>
+	RValue<T>::RValue(const RValue<T> &rvalue) : value(rvalue.value)
+	{
+		RR_DEBUG_INFO_EMIT_VAR(value);
+	}
+#endif // ENABLE_RR_DEBUG_INFO
+
 	template<class T>
 	RValue<T>::RValue(Value *rvalue)
 	{
 		assert(Nucleus::createBitCast(rvalue, T::getType()) == rvalue);   // Run-time type should match T, so bitcast is no-op.
 
 		value = rvalue;
+		RR_DEBUG_INFO_EMIT_VAR(value);
 	}
 
 	template<class T>
 	RValue<T>::RValue(const T &lvalue)
 	{
 		value = lvalue.loadValue();
+		RR_DEBUG_INFO_EMIT_VAR(value);
 	}
 
 	template<class T>
 	RValue<T>::RValue(typename BoolLiteral<T>::type i)
 	{
 		value = Nucleus::createConstantBool(i);
+		RR_DEBUG_INFO_EMIT_VAR(value);
 	}
 
 	template<class T>
 	RValue<T>::RValue(typename IntLiteral<T>::type i)
 	{
 		value = Nucleus::createConstantInt(i);
+		RR_DEBUG_INFO_EMIT_VAR(value);
 	}
 
 	template<class T>
 	RValue<T>::RValue(typename FloatLiteral<T>::type f)
 	{
 		value = Nucleus::createConstantFloat(f);
+		RR_DEBUG_INFO_EMIT_VAR(value);
 	}
 
 	template<class T>
 	RValue<T>::RValue(const Reference<T> &ref)
 	{
 		value = ref.loadValue();
+		RR_DEBUG_INFO_EMIT_VAR(value);
 	}
 
 	template<class Vector4, int T>
 	Swizzle2<Vector4, T>::operator RValue<Vector4>() const
 	{
+		RR_DEBUG_INFO_UPDATE_LOC();
 		Value *vector = parent->loadValue();
 
 		return Swizzle(RValue<Vector4>(vector), T);
@@ -2492,6 +2664,7 @@ namespace rr
 	template<class Vector4, int T>
 	Swizzle4<Vector4, T>::operator RValue<Vector4>() const
 	{
+		RR_DEBUG_INFO_UPDATE_LOC();
 		Value *vector = parent->loadValue();
 
 		return Swizzle(RValue<Vector4>(vector), T);
@@ -2500,6 +2673,7 @@ namespace rr
 	template<class Vector4, int T>
 	SwizzleMask4<Vector4, T>::operator RValue<Vector4>() const
 	{
+		RR_DEBUG_INFO_UPDATE_LOC();
 		Value *vector = parent->loadValue();
 
 		return Swizzle(RValue<Vector4>(vector), T);
@@ -2508,24 +2682,28 @@ namespace rr
 	template<class Vector4, int T>
 	RValue<Vector4> SwizzleMask4<Vector4, T>::operator=(RValue<Vector4> rhs)
 	{
+		RR_DEBUG_INFO_UPDATE_LOC();
 		return Mask(*parent, rhs, T);
 	}
 
 	template<class Vector4, int T>
 	RValue<Vector4> SwizzleMask4<Vector4, T>::operator=(RValue<typename Scalar<Vector4>::Type> rhs)
 	{
+		RR_DEBUG_INFO_UPDATE_LOC();
 		return Mask(*parent, Vector4(rhs), T);
 	}
 
 	template<class Vector4, int T>
 	SwizzleMask1<Vector4, T>::operator RValue<typename Scalar<Vector4>::Type>() const   // FIXME: Call a non-template function
 	{
+		RR_DEBUG_INFO_UPDATE_LOC();
 		return Extract(*parent, T & 0x3);
 	}
 
 	template<class Vector4, int T>
 	SwizzleMask1<Vector4, T>::operator RValue<Vector4>() const
 	{
+		RR_DEBUG_INFO_UPDATE_LOC();
 		Value *vector = parent->loadValue();
 
 		return Swizzle(RValue<Vector4>(vector), T);
@@ -2534,24 +2712,28 @@ namespace rr
 	template<class Vector4, int T>
 	RValue<Vector4> SwizzleMask1<Vector4, T>::operator=(float x)
 	{
+		RR_DEBUG_INFO_UPDATE_LOC();
 		return *parent = Insert(*parent, Float(x), T & 0x3);
 	}
 
 	template<class Vector4, int T>
 	RValue<Vector4> SwizzleMask1<Vector4, T>::operator=(RValue<Vector4> rhs)
 	{
+		RR_DEBUG_INFO_UPDATE_LOC();
 		return Mask(*parent, Float4(rhs), T);
 	}
 
 	template<class Vector4, int T>
 	RValue<Vector4> SwizzleMask1<Vector4, T>::operator=(RValue<typename Scalar<Vector4>::Type> rhs)   // FIXME: Call a non-template function
 	{
+		RR_DEBUG_INFO_UPDATE_LOC();
 		return *parent = Insert(*parent, rhs, T & 0x3);
 	}
 
 	template<class Vector4, int T>
 	SwizzleMask2<Vector4, T>::operator RValue<Vector4>() const
 	{
+		RR_DEBUG_INFO_UPDATE_LOC();
 		Value *vector = parent->loadValue();
 
 		return Swizzle(RValue<Float4>(vector), T);
@@ -2560,6 +2742,7 @@ namespace rr
 	template<class Vector4, int T>
 	RValue<Vector4> SwizzleMask2<Vector4, T>::operator=(RValue<Vector4> rhs)
 	{
+		RR_DEBUG_INFO_UPDATE_LOC();
 		return Mask(*parent, Float4(rhs), T);
 	}
 
@@ -2590,24 +2773,28 @@ namespace rr
 	template<int X, int Y>
 	Float4::Float4(const Swizzle2<Float4, X> &x, const Swizzle2<Float4, Y> &y) : XYZW(this)
 	{
+		RR_DEBUG_INFO_UPDATE_LOC();
 		*this = ShuffleLowHigh(*x.parent, *y.parent, (X & 0xF) | (Y & 0xF) << 4);
 	}
 
 	template<int X, int Y>
 	Float4::Float4(const SwizzleMask2<Float4, X> &x, const Swizzle2<Float4, Y> &y) : XYZW(this)
 	{
+		RR_DEBUG_INFO_UPDATE_LOC();
 		*this = ShuffleLowHigh(*x.parent, *y.parent, (X & 0xF) | (Y & 0xF) << 4);
 	}
 
 	template<int X, int Y>
 	Float4::Float4(const Swizzle2<Float4, X> &x, const SwizzleMask2<Float4, Y> &y) : XYZW(this)
 	{
+		RR_DEBUG_INFO_UPDATE_LOC();
 		*this = ShuffleLowHigh(*x.parent, *y.parent, (X & 0xF) | (Y & 0xF) << 4);
 	}
 
 	template<int X, int Y>
 	Float4::Float4(const SwizzleMask2<Float4, X> &x, const SwizzleMask2<Float4, Y> &y) : XYZW(this)
 	{
+		RR_DEBUG_INFO_UPDATE_LOC();
 		*this = ShuffleLowHigh(*x.parent, *y.parent, (X & 0xF) | (Y & 0xF) << 4);
 	}
 
@@ -2631,10 +2818,7 @@ namespace rr
 	}
 
 	template<class T>
-	Pointer<T>::Pointer() : alignment(1)
-	{
-		LValue<Pointer<T>>::storeValue(Nucleus::createNullPointer(T::getType()));
-	}
+	Pointer<T>::Pointer() : alignment(1) {}
 
 	template<class T>
 	Pointer<T>::Pointer(RValue<Pointer<T>> rhs) : alignment(1)
@@ -2653,6 +2837,13 @@ namespace rr
 	Pointer<T>::Pointer(const Reference<Pointer<T>> &rhs) : alignment(rhs.getAlignment())
 	{
 		Value *value = rhs.loadValue();
+		LValue<Pointer<T>>::storeValue(value);
+	}
+
+	template<class T>
+	Pointer<T>::Pointer(std::nullptr_t) : alignment(1)
+	{
+		Value *value = Nucleus::createNullPointer(T::getType());
 		LValue<Pointer<T>>::storeValue(value);
 	}
 
@@ -2683,6 +2874,15 @@ namespace rr
 	}
 
 	template<class T>
+	RValue<Pointer<T>> Pointer<T>::operator=(std::nullptr_t)
+	{
+		Value *value = Nucleus::createNullPointer(T::getType());
+		LValue<Pointer<T>>::storeValue(value);
+
+		return RValue<Pointer<T>>(this);
+	}
+
+	template<class T>
 	Reference<T> Pointer<T>::operator*()
 	{
 		return Reference<T>(LValue<Pointer<T>>::loadValue(), alignment);
@@ -2691,6 +2891,7 @@ namespace rr
 	template<class T>
 	Reference<T> Pointer<T>::operator[](int index)
 	{
+		RR_DEBUG_INFO_UPDATE_LOC();
 		Value *element = Nucleus::createGEP(LValue<Pointer<T>>::loadValue(), T::getType(), Nucleus::createConstantInt(index), false);
 
 		return Reference<T>(element, alignment);
@@ -2699,6 +2900,7 @@ namespace rr
 	template<class T>
 	Reference<T> Pointer<T>::operator[](unsigned int index)
 	{
+		RR_DEBUG_INFO_UPDATE_LOC();
 		Value *element = Nucleus::createGEP(LValue<Pointer<T>>::loadValue(), T::getType(), Nucleus::createConstantInt(index), true);
 
 		return Reference<T>(element, alignment);
@@ -2707,6 +2909,7 @@ namespace rr
 	template<class T>
 	Reference<T> Pointer<T>::operator[](RValue<Int> index)
 	{
+		RR_DEBUG_INFO_UPDATE_LOC();
 		Value *element = Nucleus::createGEP(LValue<Pointer<T>>::loadValue(), T::getType(), index.value, false);
 
 		return Reference<T>(element, alignment);
@@ -2715,6 +2918,7 @@ namespace rr
 	template<class T>
 	Reference<T> Pointer<T>::operator[](RValue<UInt> index)
 	{
+		RR_DEBUG_INFO_UPDATE_LOC();
 		Value *element = Nucleus::createGEP(LValue<Pointer<T>>::loadValue(), T::getType(), index.value, true);
 
 		return Reference<T>(element, alignment);
@@ -2734,6 +2938,7 @@ namespace rr
 	template<class T, int S>
 	Reference<T> Array<T, S>::operator[](int index)
 	{
+		assert(index < this->arraySize);
 		Value *element = LValue<T>::getElementPointer(Nucleus::createConstantInt(index), false);
 
 		return Reference<T>(element);
@@ -2742,6 +2947,7 @@ namespace rr
 	template<class T, int S>
 	Reference<T> Array<T, S>::operator[](unsigned int index)
 	{
+		assert(index < static_cast<unsigned int>(this->arraySize));
 		Value *element = LValue<T>::getElementPointer(Nucleus::createConstantInt(index), true);
 
 		return Reference<T>(element);
@@ -2790,12 +2996,14 @@ namespace rr
 	template<class T>
 	RValue<T> IfThenElse(RValue<Bool> condition, RValue<T> ifTrue, RValue<T> ifFalse)
 	{
+		RR_DEBUG_INFO_UPDATE_LOC();
 		return RValue<T>(Nucleus::createSelect(condition.value, ifTrue.value, ifFalse.value));
 	}
 
 	template<class T>
 	RValue<T> IfThenElse(RValue<Bool> condition, const T &ifTrue, RValue<T> ifFalse)
 	{
+		RR_DEBUG_INFO_UPDATE_LOC();
 		Value *trueValue = ifTrue.loadValue();
 
 		return RValue<T>(Nucleus::createSelect(condition.value, trueValue, ifFalse.value));
@@ -2804,6 +3012,7 @@ namespace rr
 	template<class T>
 	RValue<T> IfThenElse(RValue<Bool> condition, RValue<T> ifTrue, const T &ifFalse)
 	{
+		RR_DEBUG_INFO_UPDATE_LOC();
 		Value *falseValue = ifFalse.loadValue();
 
 		return RValue<T>(Nucleus::createSelect(condition.value, ifTrue.value, falseValue));
@@ -2812,26 +3021,11 @@ namespace rr
 	template<class T>
 	RValue<T> IfThenElse(RValue<Bool> condition, const T &ifTrue, const T &ifFalse)
 	{
+		RR_DEBUG_INFO_UPDATE_LOC();
 		Value *trueValue = ifTrue.loadValue();
 		Value *falseValue = ifFalse.loadValue();
 
 		return RValue<T>(Nucleus::createSelect(condition.value, trueValue, falseValue));
-	}
-
-	template<class T>
-	void Return(const Pointer<T> &ret)
-	{
-		Nucleus::createRet(Nucleus::createLoad(ret.address, Pointer<T>::getType()));
-		Nucleus::setInsertBlock(Nucleus::createBasicBlock());
-		Nucleus::createUnreachable();
-	}
-
-	template<class T>
-	void Return(RValue<Pointer<T>> ret)
-	{
-		Nucleus::createRet(ret.value);
-		Nucleus::setInsertBlock(Nucleus::createBasicBlock());
-		Nucleus::createUnreachable();
 	}
 
 	template<typename Return, typename... Arguments>
@@ -2858,7 +3052,7 @@ namespace rr
 	}
 
 	template<typename Return, typename... Arguments>
-	Routine *Function<Return(Arguments...)>::operator()(const char *name, ...)
+	std::shared_ptr<Routine> Function<Return(Arguments...)>::operator()(const char *name, ...)
 	{
 		char fullName[1024 + 1];
 
@@ -2867,18 +3061,33 @@ namespace rr
 		vsnprintf(fullName, 1024, name, vararg);
 		va_end(vararg);
 
-		return core->acquireRoutine(fullName, true);
+		return core->acquireRoutine(fullName, Config::Edit::None);
+	}
+
+	template<typename Return, typename... Arguments>
+	std::shared_ptr<Routine> Function<Return(Arguments...)>::operator()(const Config::Edit &cfg, const char *name, ...)
+	{
+		char fullName[1024 + 1];
+
+		va_list vararg;
+		va_start(vararg, name);
+		vsnprintf(fullName, 1024, name, vararg);
+		va_end(vararg);
+
+		return core->acquireRoutine(fullName, cfg);
 	}
 
 	template<class T, class S>
 	RValue<T> ReinterpretCast(RValue<S> val)
 	{
+		RR_DEBUG_INFO_UPDATE_LOC();
 		return RValue<T>(Nucleus::createBitCast(val.value, T::getType()));
 	}
 
 	template<class T, class S>
 	RValue<T> ReinterpretCast(const LValue<S> &var)
 	{
+		RR_DEBUG_INFO_UPDATE_LOC();
 		Value *val = var.loadValue();
 
 		return RValue<T>(Nucleus::createBitCast(val, T::getType()));
@@ -2893,6 +3102,7 @@ namespace rr
 	template<class T>
 	RValue<T> As(Value *val)
 	{
+		RR_DEBUG_INFO_UPDATE_LOC();
 		return RValue<T>(Nucleus::createBitCast(val, T::getType()));
 	}
 
@@ -2913,6 +3123,82 @@ namespace rr
 	{
 		return ReinterpretCast<T>(val);
 	}
+
+	// Returns a reactor pointer to the fixed-address ptr.
+	RValue<Pointer<Byte>> ConstantPointer(void const * ptr);
+
+	// Calls the function pointer fptr with the given arguments, return type
+	// and parameter types. Returns the call's return value if the function has
+	// a non-void return type.
+	Value* Call(RValue<Pointer<Byte>> fptr, Type* retTy, std::initializer_list<Value*> args, std::initializer_list<Type*> paramTys);
+
+	template <typename F>
+	class CallHelper {};
+
+	template<typename Return, typename ... Arguments>
+	class CallHelper<Return(Arguments...)>
+	{
+	public:
+		using RReturn = CToReactor<Return>;
+
+		static inline RReturn Call(Return(fptr)(Arguments...), CToReactor<Arguments>... args)
+		{
+			return RValue<RReturn>(rr::Call(
+				ConstantPointer(reinterpret_cast<void*>(fptr)),
+				RReturn::getType(),
+				{ ValueOf(args) ... },
+				{ CToReactor<Arguments>::getType() ... }));
+		}
+
+		static inline RReturn Call(Pointer<Byte> fptr, CToReactor<Arguments>... args)
+		{
+			return RValue<RReturn>(rr::Call(
+				fptr,
+				RReturn::getType(),
+				{ ValueOf(args) ... },
+				{ CToReactor<Arguments>::getType() ... }));
+		}
+	};
+
+	template<typename ... Arguments>
+	class CallHelper<void(Arguments...)>
+	{
+	public:
+		static inline void Call(void(fptr)(Arguments...), CToReactor<Arguments>... args)
+		{
+			rr::Call(ConstantPointer(reinterpret_cast<void*>(fptr)),
+				Void::getType(),
+				{ ValueOf(args) ... },
+				{ CToReactor<Arguments>::getType() ... });
+		}
+
+		static inline void Call(Pointer<Byte> fptr, CToReactor<Arguments>... args)
+		{
+			rr::Call(fptr,
+				Void::getType(),
+				{ ValueOf(args) ... },
+				{ CToReactor<Arguments>::getType() ... });
+		}
+	};
+
+	// Calls the function pointer fptr with the given arguments args.
+	template<typename Return, typename ... Arguments>
+	inline CToReactor<Return> Call(Return(fptr)(Arguments...), CToReactor<Arguments>... args)
+	{
+		return CallHelper<Return(Arguments...)>::Call(fptr, args...);
+	}
+
+	// Calls the function pointer fptr with the signature FUNCTION_SIGNATURE and
+	// arguments.
+	template<typename FUNCTION_SIGNATURE, typename ... Arguments>
+	inline void Call(Pointer<Byte> fptr, Arguments ... args)
+	{
+		CallHelper<FUNCTION_SIGNATURE>::Call(fptr, args...);
+	}
+
+	// Breakpoint emits an instruction that will cause the application to trap.
+	// This can be used to stop an attached debugger at the given call.
+	void Breakpoint();
 
 #ifdef ENABLE_RR_PRINT
 	// PrintValue holds the printf format and value(s) for a single argument
@@ -2940,16 +3226,16 @@ namespace rr
 
 		// returns the printf value(s) for the given LValue.
 		template <typename T>
-		static std::vector<Value*> val(const LValue<T>& v) { return val(RValue<T>(v.loadValue())); };
+		static std::vector<Value*> val(const LValue<T>& v) { return val(RValue<T>(v.loadValue())); }
 
 		// returns the printf value(s) for the given RValue.
 		template <typename T>
-		static std::vector<Value*> val(const RValue<T>& v) { return Ty<T>::val(v); };
+		static std::vector<Value*> val(const RValue<T>& v) { return Ty<T>::val(v); }
 
 		// returns the printf value from for the given type with a
 		// PrintValue::Ty<T> specialization.
 		template <typename T>
-		static std::vector<Value*> val(const T& v) { return Ty<T>::val(v); };
+		static std::vector<Value*> val(const T& v) { return Ty<T>::val(v); }
 
 		// returns the printf values for all the values in the given array.
 		template <typename T>
@@ -2962,7 +3248,7 @@ namespace rr
 				values.insert(values.end(), v.begin(), v.end());
 			}
 			return values;
-		};
+		}
 
 		// fmt returns a comma-delimited list of the string el repeated count
 		// times enclosed in square brackets.
@@ -2975,6 +3261,13 @@ namespace rr
 				out += el;
 			}
 			return out + "]";
+		}
+
+		static std::string addr(const void* ptr)
+		{
+			char buf[32];
+			snprintf(buf, sizeof(buf), "%p", ptr);
+			return buf;
 		}
 
 	public:
@@ -2994,7 +3287,6 @@ namespace rr
 		template <typename T>
 		PrintValue(const T* arr, int len) : format(fmt(Ty<T>::fmt, len)), values(val(arr, len)) {}
 
-
 		// PrintValue constructors for plain-old-data values.
 		PrintValue(bool v) : format(v ? "true" : "false") {}
 		PrintValue(int8_t v) : format(std::to_string(v)) {}
@@ -3007,8 +3299,9 @@ namespace rr
 		PrintValue(uint64_t v) : format(std::to_string(v)) {}
 		PrintValue(float v) : format(std::to_string(v)) {}
 		PrintValue(double v) : format(std::to_string(v)) {}
-		PrintValue(const char* v) : format(v) {}
-		PrintValue(const std::string& v) : format(v) {}
+
+		template <typename T>
+		PrintValue(const T* v) : format(addr(v)) {}
 
 		// vals is a helper to build composite value lists.
 		// vals returns the full, sequential list of printf argument values used
@@ -3047,6 +3340,18 @@ namespace rr
 		}
 	};
 
+	// PrintValue::Ty<T> specializations for basic types.
+	template <> struct PrintValue::Ty<const char*>
+	{
+		static constexpr const char* fmt = "%s";
+		static std::vector<Value*> val(const char* v);
+	};
+	template <> struct PrintValue::Ty<std::string>
+	{
+		static constexpr const char* fmt = PrintValue::Ty<const char*>::fmt;
+		static std::vector<Value*> val(const std::string& v) { return PrintValue::Ty<const char*>::val(v.c_str()); }
+	};
+
 	// PrintValue::Ty<T> specializations for standard Reactor types.
 	template <> struct PrintValue::Ty<Bool>
 	{
@@ -3066,7 +3371,12 @@ namespace rr
 	template <> struct PrintValue::Ty<Int>
 	{
 		static constexpr const char* fmt = "%d";
-		static std::vector<Value*> val(const RValue<Int>& v) { return {v.value}; }
+		static std::vector<Value*> val(const RValue<Int>& v);
+	};
+	template <> struct PrintValue::Ty<Int2>
+	{
+		static constexpr const char* fmt = "[%d, %d]";
+		static std::vector<Value*> val(const RValue<Int2>& v);
 	};
 	template <> struct PrintValue::Ty<Int4>
 	{
@@ -3076,7 +3386,12 @@ namespace rr
 	template <> struct PrintValue::Ty<UInt>
 	{
 		static constexpr const char* fmt = "%u";
-		static std::vector<Value*> val(const RValue<UInt>& v) { return {v.value}; }
+		static std::vector<Value*> val(const RValue<UInt>& v);
+	};
+	template <> struct PrintValue::Ty<UInt2>
+	{
+		static constexpr const char* fmt = "[%u, %u]";
+		static std::vector<Value*> val(const RValue<UInt2>& v);
 	};
 	template <> struct PrintValue::Ty<UInt4>
 	{
@@ -3112,6 +3427,11 @@ namespace rr
 	{
 		static constexpr const char* fmt = "[%f, %f, %f, %f]";
 		static std::vector<Value*> val(const RValue<Float4>& v);
+	};
+	template <> struct PrintValue::Ty<Long>
+	{
+		static constexpr const char* fmt = "%lld";
+		static std::vector<Value*> val(const RValue<Long>& v) { return {v.value}; }
 	};
 	template <typename T> struct PrintValue::Ty< Pointer<T> >
 	{
@@ -3167,18 +3487,18 @@ namespace rr
 	//
 	// RR_LOG() is intended to be used for debugging JIT compiled code, and is
 	// not intended for production use.
-	#define RR_LOG(msg, ...) Print(__PRETTY_FUNCTION__, __FILE__, __LINE__, msg "\n", ##__VA_ARGS__)
+	#if defined(_WIN32)
+		#define RR_LOG(msg, ...) Print(__FUNCSIG__, __FILE__, static_cast<int>(__LINE__), msg "\n", ##__VA_ARGS__)
+	#else
+		#define RR_LOG(msg, ...) Print(__PRETTY_FUNCTION__, __FILE__, static_cast<int>(__LINE__), msg "\n", ##__VA_ARGS__)
+	#endif
 
 	// Macro magic to perform variadic dispatch.
 	// See: https://renenyffenegger.ch/notes/development/languages/C-C-plus-plus/preprocessor/macros/__VA_ARGS__/count-arguments
 	// Note, this doesn't attempt to use the ##__VA_ARGS__ trick to handle 0
-	// args as this appears to still be broken on certain compilers.
-	// MSVC also has issues with variadic macros which requires the RR_VA_MSVC_BUG() work-around.
-	// See: https://stackoverflow.com/a/48711060
-	#define RR_VA_MSVC_BUG(MACRO, ARGS) MACRO ARGS
-	#define RR_GET_NTH_ARG_EX(_1, _2, _3, _4, _5, _6, _7, _8, _9, _10, _11, _12, _13, _14, _15, _16, N, ...) N
-	#define RR_GET_NTH_ARG(...) RR_VA_MSVC_BUG(RR_GET_NTH_ARG_EX, (__VA_ARGS__))
-	#define RR_COUNT_ARGUMENTS(...) RR_GET_NTH_ARG(__VA_ARGS__, 16, 15, 14, 13, 12, 11, 10, 9, 8, 7, 6, 5, 4, 3, 2, 1, 0)
+	#define RR_MSVC_EXPAND_BUG(X) X // Helper macro to force expanding __VA_ARGS__ to satisfy MSVC compiler.
+	#define RR_GET_NTH_ARG(_1, _2, _3, _4, _5, _6, _7, _8, _9, _10, _11, _12, _13, _14, _15, _16, N, ...) N
+	#define RR_COUNT_ARGUMENTS(...) RR_MSVC_EXPAND_BUG(RR_GET_NTH_ARG(__VA_ARGS__, 16, 15, 14, 13, 12, 11, 10, 9, 8, 7, 6, 5, 4, 3, 2, 1, 0))
 	static_assert(1 == RR_COUNT_ARGUMENTS(a), "RR_COUNT_ARGUMENTS broken"); // Sanity checks.
 	static_assert(2 == RR_COUNT_ARGUMENTS(a, b), "RR_COUNT_ARGUMENTS broken");
 	static_assert(3 == RR_COUNT_ARGUMENTS(a, b, c), "RR_COUNT_ARGUMENTS broken");
@@ -3191,7 +3511,7 @@ namespace rr
 	// corresponding RR_WATCH_FMT_n specialization macro below.
 	#define RR_WATCH_CONCAT(a, b) a ## b
 	#define RR_WATCH_CONCAT2(a, b) RR_WATCH_CONCAT(a, b)
-	#define RR_WATCH_FMT(...) RR_WATCH_CONCAT2(RR_WATCH_FMT_, RR_COUNT_ARGUMENTS(__VA_ARGS__))(__VA_ARGS__)
+	#define RR_WATCH_FMT(...) RR_MSVC_EXPAND_BUG(RR_WATCH_CONCAT2(RR_WATCH_FMT_, RR_COUNT_ARGUMENTS(__VA_ARGS__))(__VA_ARGS__))
 	#define RR_WATCH_FMT_1(_1) "\n  " #_1 ": {0}"
 	#define RR_WATCH_FMT_2(_1, _2)                                             RR_WATCH_FMT_1(_1) "\n  " #_2 ": {1}"
 	#define RR_WATCH_FMT_3(_1, _2, _3)                                         RR_WATCH_FMT_2(_1, _2) "\n  " #_3 ": {2}"
@@ -3237,6 +3557,7 @@ namespace rr
 
 		bool setup()
 		{
+			RR_DEBUG_INFO_FLUSH();
 			if(Nucleus::getInsertBlock() != endBB)
 			{
 				testBB = Nucleus::createBasicBlock();

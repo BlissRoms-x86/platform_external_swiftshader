@@ -23,28 +23,21 @@
 #include "Vulkan/VkDebug.hpp"
 #include "Pipeline/SpirvShader.hpp"
 
+#include <cstring>
+
 namespace sw
 {
-	extern bool fullPixelPositionRegister;
-
-	bool precacheSetup = false;
-
-	unsigned int SetupProcessor::States::computeHash()
+	uint32_t SetupProcessor::States::computeHash()
 	{
-		unsigned int *state = (unsigned int*)this;
-		unsigned int hash = 0;
+		uint32_t *state = reinterpret_cast<uint32_t*>(this);
+		uint32_t hash = 0;
 
-		for(unsigned int i = 0; i < sizeof(States) / 4; i++)
+		for(unsigned int i = 0; i < sizeof(States) / sizeof(uint32_t); i++)
 		{
 			hash ^= state[i];
 		}
 
 		return hash;
-	}
-
-	SetupProcessor::State::State(int i)
-	{
-		memset(this, 0, sizeof(State));
 	}
 
 	bool SetupProcessor::State::operator==(const State &state) const
@@ -54,10 +47,11 @@ namespace sw
 			return false;
 		}
 
+		static_assert(is_memcmparable<State>::value, "Cannot memcmp States");
 		return memcmp(static_cast<const States*>(this), static_cast<const States*>(&state), sizeof(States)) == 0;
 	}
 
-	SetupProcessor::SetupProcessor(Context *context) : context(context)
+	SetupProcessor::SetupProcessor()
 	{
 		routineCache = nullptr;
 		setRoutineCacheSize(1024);
@@ -69,30 +63,30 @@ namespace sw
 		routineCache = nullptr;
 	}
 
-	SetupProcessor::State SetupProcessor::update() const
+	SetupProcessor::State SetupProcessor::update(const sw::Context* context) const
 	{
 		State state;
 
-		bool vPosZW = (context->pixelShader && context->pixelShader->hasBuiltinInput(spv::BuiltInPosition));
+		bool vPosZW = (context->pixelShader && context->pixelShader->hasBuiltinInput(spv::BuiltInFragCoord));
 
 		state.isDrawPoint = context->isDrawPoint();
 		state.isDrawLine = context->isDrawLine();
 		state.isDrawTriangle = context->isDrawTriangle();
 		state.interpolateZ = context->depthBufferActive() || vPosZW;
-		state.interpolateW = context->perspectiveActive() || vPosZW;
-		state.perspective = context->perspectiveActive();
-		state.frontFacingCCW = context->frontFacingCCW;
+		state.interpolateW = context->pixelShader != nullptr;
+		state.frontFace = context->frontFace;
 		state.cullMode = context->cullMode;
-		state.twoSidedStencil = context->stencilActive() && context->twoSidedStencil;
 		state.slopeDepthBias = context->slopeDepthBias != 0.0f;
-		state.vFace = context->pixelShader && context->pixelShader->hasBuiltinInput(spv::BuiltInFrontFacing);
 
 		state.multiSample = context->sampleCount;
 		state.rasterizerDiscard = context->rasterizerDiscard;
 
-		for (int interpolant = 0; interpolant < MAX_INTERFACE_COMPONENTS; interpolant++)
+		if (context->pixelShader)
 		{
-			state.gradient[interpolant] = context->pixelShader->inputs[interpolant];
+			for (int interpolant = 0; interpolant < MAX_INTERFACE_COMPONENTS; interpolant++)
+			{
+				state.gradient[interpolant] = context->pixelShader->inputs[interpolant];
+			}
 		}
 
 		state.hash = state.computeHash();
@@ -100,9 +94,9 @@ namespace sw
 		return state;
 	}
 
-	Routine *SetupProcessor::routine(const State &state)
+	std::shared_ptr<Routine> SetupProcessor::routine(const State &state)
 	{
-		Routine *routine = routineCache->query(state);
+		auto routine = routineCache->query(state);
 
 		if(!routine)
 		{

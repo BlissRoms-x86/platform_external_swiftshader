@@ -20,23 +20,94 @@
 
 namespace sw
 {
-	extern bool postBlendSRGB;
-
 	void PixelProgram::setBuiltins(Int &x, Int &y, Float4(&z)[4], Float4 &w)
 	{
-		// TODO: wire up builtins correctly
+		routine.windowSpacePosition[0] = x + SIMD::Int(0,1,0,1);
+		routine.windowSpacePosition[1] = y + SIMD::Int(0,0,1,1);
+
+		auto it = spirvShader->inputBuiltins.find(spv::BuiltInFragCoord);
+		if (it != spirvShader->inputBuiltins.end())
+		{
+			auto &var = routine.getVariable(it->second.Id);
+			var[it->second.FirstComponent] = SIMD::Float(Float(x)) + SIMD::Float(0.5f, 1.5f, 0.5f, 1.5f);
+			var[it->second.FirstComponent+1] = SIMD::Float(Float(y)) + SIMD::Float(0.5f, 0.5f, 1.5f, 1.5f);
+			var[it->second.FirstComponent+2] = z[0];	// sample 0
+			var[it->second.FirstComponent+3] = w;
+		}
+
+		it = spirvShader->inputBuiltins.find(spv::BuiltInPointCoord);
+		if(it != spirvShader->inputBuiltins.end())
+		{
+			auto &var = routine.getVariable(it->second.Id);
+			var[it->second.FirstComponent] = SIMD::Float(0.5f) +
+				SIMD::Float(Float(x) - (*Pointer<Float>(primitive + OFFSET(Primitive, pointCoordX))));
+			var[it->second.FirstComponent + 1] = SIMD::Float(0.5f) +
+				SIMD::Float(Float(y) - (*Pointer<Float>(primitive + OFFSET(Primitive, pointCoordY))));
+		}
+
+		it = spirvShader->inputBuiltins.find(spv::BuiltInSubgroupSize);
+		if (it != spirvShader->inputBuiltins.end())
+		{
+			ASSERT(it->second.SizeInComponents == 1);
+			routine.getVariable(it->second.Id)[it->second.FirstComponent] = As<SIMD::Float>(SIMD::Int(SIMD::Width));
+		}
+
+		it = spirvShader->inputBuiltins.find(spv::BuiltInSubgroupLocalInvocationId);
+		if (it != spirvShader->inputBuiltins.end())
+		{
+			ASSERT(it->second.SizeInComponents == 1);
+			routine.getVariable(it->second.Id)[it->second.FirstComponent] = As<SIMD::Float>(SIMD::Int(0, 1, 2, 3));
+		}
+
+		it = spirvShader->inputBuiltins.find(spv::BuiltInDeviceIndex);
+		if (it != spirvShader->inputBuiltins.end())
+		{
+			ASSERT(it->second.SizeInComponents == 1);
+			// Only a single physical device is supported.
+			routine.getVariable(it->second.Id)[it->second.FirstComponent] = As<SIMD::Float>(SIMD::Int(0, 0, 0, 0));
+		}
 	}
 
 	void PixelProgram::applyShader(Int cMask[4])
 	{
-		enableIndex = 0;
-
 		routine.descriptorSets = data + OFFSET(DrawData, descriptorSets);
 		routine.descriptorDynamicOffsets = data + OFFSET(DrawData, descriptorDynamicOffsets);
 		routine.pushConstants = data + OFFSET(DrawData, pushConstants);
+		routine.constants = *Pointer<Pointer<Byte>>(data + OFFSET(DrawData, constants));
 
-		auto activeLaneMask = SIMD::Int(0xFFFFFFFF); // TODO: Control this.
-		spirvShader->emit(&routine, activeLaneMask);
+		auto it = spirvShader->inputBuiltins.find(spv::BuiltInFrontFacing);
+		if (it != spirvShader->inputBuiltins.end())
+		{
+			ASSERT(it->second.SizeInComponents == 1);
+			auto frontFacing = Int4(*Pointer<Int>(primitive + OFFSET(Primitive, clockwiseMask)));
+			routine.getVariable(it->second.Id)[it->second.FirstComponent] = As<Float4>(frontFacing);
+		}
+
+		it = spirvShader->inputBuiltins.find(spv::BuiltInSampleMask);
+		if (it != spirvShader->inputBuiltins.end())
+		{
+			static_assert(SIMD::Width == 4, "Expects SIMD width to be 4");
+			Int4 laneBits = Int4(1, 2, 4, 8);
+
+			Int4 inputSampleMask = Int4(1) & CmpNEQ(Int4(cMask[0]) & laneBits, Int4(0));
+			for (auto i = 1u; i < state.multiSample; i++)
+			{
+				inputSampleMask |= Int4(1 << i) & CmpNEQ(Int4(cMask[i]) & laneBits, Int4(0));
+			}
+
+			routine.getVariable(it->second.Id)[it->second.FirstComponent] = As<Float4>(inputSampleMask);
+			// Sample mask input is an array, as the spec contemplates MSAA levels higher than 32.
+			// Fill any non-zero indices with 0.
+			for (auto i = 1u; i < it->second.SizeInComponents; i++)
+				routine.getVariable(it->second.Id)[it->second.FirstComponent + i] = Float4(0);
+		}
+
+		// Note: all lanes initially active to facilitate derivatives etc. Actual coverage is
+		// handled separately, through the cMask.
+		auto activeLaneMask = SIMD::Int(0xFFFFFFFF);
+		routine.killMask = 0;
+
+		spirvShader->emit(&routine, activeLaneMask, descriptorSets);
 		spirvShader->emitEpilog(&routine);
 
 		for(int i = 0; i < RENDERTARGETS; i++)
@@ -57,24 +128,32 @@ namespace sw
 			}
 		}
 
-		if(spirvShader->getModes().DepthReplacing)
+		it = spirvShader->outputBuiltins.find(spv::BuiltInSampleMask);
+		if (it != spirvShader->outputBuiltins.end())
 		{
-			oDepth = Min(Max(oDepth, Float4(0.0f)), Float4(1.0f));
+			auto outputSampleMask = As<SIMD::Int>(routine.getVariable(it->second.Id)[it->second.FirstComponent]);
+
+			for (auto i = 0u; i < state.multiSample; i++)
+			{
+				cMask[i] &= SignMask(CmpNEQ(outputSampleMask & SIMD::Int(1<<i), SIMD::Int(0)));
+			}
+		}
+
+		it = spirvShader->outputBuiltins.find(spv::BuiltInFragDepth);
+		if (it != spirvShader->outputBuiltins.end())
+		{
+			oDepth = Min(Max(routine.getVariable(it->second.Id)[it->second.FirstComponent], Float4(0.0f)), Float4(1.0f));
 		}
 	}
 
 	Bool PixelProgram::alphaTest(Int cMask[4])
 	{
-		if(!state.alphaTestActive())
+		if(!state.alphaToCoverage)
 		{
 			return true;
 		}
 
-		if(state.transparencyAntialiasing == TRANSPARENCY_ALPHA_TO_COVERAGE)
-		{
-			alphaToCoverage(cMask, c[0].w);
-		}
-		else ASSERT(false);
+		alphaToCoverage(cMask, c[0].w);
 
 		Int pass = cMask[0];
 
@@ -95,29 +174,27 @@ namespace sw
 				continue;
 			}
 
-			if(!postBlendSRGB && state.writeSRGB && !isSRGB(index))
-			{
-				c[index].x = linearToSRGB(c[index].x);
-				c[index].y = linearToSRGB(c[index].y);
-				c[index].z = linearToSRGB(c[index].z);
-			}
-
-			switch(state.targetFormat[index])
+			auto format = state.targetFormat[index];
+			switch(format)
 			{
 			case VK_FORMAT_R5G6B5_UNORM_PACK16:
 			case VK_FORMAT_B8G8R8A8_UNORM:
+			case VK_FORMAT_B8G8R8A8_SRGB:
 			case VK_FORMAT_R8G8B8A8_UNORM:
 			case VK_FORMAT_R8G8B8A8_SRGB:
 			case VK_FORMAT_R8G8_UNORM:
 			case VK_FORMAT_R8_UNORM:
 			case VK_FORMAT_R16G16_UNORM:
 			case VK_FORMAT_R16G16B16A16_UNORM:
+			case VK_FORMAT_A8B8G8R8_UNORM_PACK32:
+			case VK_FORMAT_A8B8G8R8_SRGB_PACK32:
+			case VK_FORMAT_A2B10G10R10_UNORM_PACK32:
 				for(unsigned int q = 0; q < state.multiSample; q++)
 				{
 					Pointer<Byte> buffer = cBuffer[index] + q * *Pointer<Int>(data + OFFSET(DrawData, colorSliceB[index]));
 					Vector4s color;
 
-					if(state.targetFormat[index] == VK_FORMAT_R5G6B5_UNORM_PACK16)
+					if(format == VK_FORMAT_R5G6B5_UNORM_PACK16)
 					{
 						color.x = UShort4(c[index].x * Float4(0xFBFF), false);
 						color.y = UShort4(c[index].y * Float4(0xFDFF), false);
@@ -139,6 +216,9 @@ namespace sw
 					}
 				}
 				break;
+			case VK_FORMAT_R16_SFLOAT:
+			case VK_FORMAT_R16G16_SFLOAT:
+			case VK_FORMAT_R16G16B16A16_SFLOAT:
 			case VK_FORMAT_R32_SFLOAT:
 			case VK_FORMAT_R32G32_SFLOAT:
 			case VK_FORMAT_R32G32B32A32_SFLOAT:
@@ -160,6 +240,9 @@ namespace sw
 			case VK_FORMAT_R8_UINT:
 			case VK_FORMAT_R8G8_UINT:
 			case VK_FORMAT_R8G8B8A8_UINT:
+			case VK_FORMAT_A8B8G8R8_UINT_PACK32:
+			case VK_FORMAT_A8B8G8R8_SINT_PACK32:
+			case VK_FORMAT_A2B10G10R10_UINT_PACK32:
 				for(unsigned int q = 0; q < state.multiSample; q++)
 				{
 					Pointer<Byte> buffer = cBuffer[index] + q * *Pointer<Int>(data + OFFSET(DrawData, colorSliceB[index]));
@@ -173,7 +256,7 @@ namespace sw
 				}
 				break;
 			default:
-				ASSERT(false);
+				UNIMPLEMENTED("VkFormat: %d", int(format));
 			}
 		}
 	}
@@ -182,7 +265,7 @@ namespace sw
 	{
 		for(int index = 0; index < RENDERTARGETS; index++)
 		{
-			if(!state.colorWriteActive(index) && !(index == 0 && state.alphaTestActive()))
+			if(!state.colorWriteActive(index) && !(index == 0 && state.alphaToCoverage))
 			{
 				continue;
 			}
@@ -193,12 +276,16 @@ namespace sw
 				break;
 			case VK_FORMAT_R5G6B5_UNORM_PACK16:
 			case VK_FORMAT_B8G8R8A8_UNORM:
+			case VK_FORMAT_B8G8R8A8_SRGB:
 			case VK_FORMAT_R8G8B8A8_UNORM:
 			case VK_FORMAT_R8G8B8A8_SRGB:
 			case VK_FORMAT_R8G8_UNORM:
 			case VK_FORMAT_R8_UNORM:
 			case VK_FORMAT_R16G16_UNORM:
 			case VK_FORMAT_R16G16B16A16_UNORM:
+			case VK_FORMAT_A8B8G8R8_UNORM_PACK32:
+			case VK_FORMAT_A8B8G8R8_SRGB_PACK32:
+			case VK_FORMAT_A2B10G10R10_UNORM_PACK32:
 				oC[index].x = Max(oC[index].x, Float4(0.0f)); oC[index].x = Min(oC[index].x, Float4(1.0f));
 				oC[index].y = Max(oC[index].y, Float4(0.0f)); oC[index].y = Min(oC[index].y, Float4(1.0f));
 				oC[index].z = Max(oC[index].z, Float4(0.0f)); oC[index].z = Min(oC[index].z, Float4(1.0f));
@@ -213,6 +300,9 @@ namespace sw
 			case VK_FORMAT_R32_UINT:
 			case VK_FORMAT_R32G32_UINT:
 			case VK_FORMAT_R32G32B32A32_UINT:
+			case VK_FORMAT_R16_SFLOAT:
+			case VK_FORMAT_R16G16_SFLOAT:
+			case VK_FORMAT_R16G16B16A16_SFLOAT:
 			case VK_FORMAT_R16_SINT:
 			case VK_FORMAT_R16G16_SINT:
 			case VK_FORMAT_R16G16B16A16_SINT:
@@ -225,17 +315,14 @@ namespace sw
 			case VK_FORMAT_R8_UINT:
 			case VK_FORMAT_R8G8_UINT:
 			case VK_FORMAT_R8G8B8A8_UINT:
+			case VK_FORMAT_A8B8G8R8_UINT_PACK32:
+			case VK_FORMAT_A8B8G8R8_SINT_PACK32:
+			case VK_FORMAT_A2B10G10R10_UINT_PACK32:
 				break;
 			default:
-				ASSERT(false);
+				UNIMPLEMENTED("VkFormat: %d", int(state.targetFormat[index]));
 			}
 		}
-	}
-
-	Int4 PixelProgram::enableMask()
-	{
-		Int4 enable = true ? Int4(enableStack[enableIndex]) : Int4(0xFFFFFFFF);
-		return enable;
 	}
 
 	Float4 PixelProgram::linearToSRGB(const Float4 &x)   // Approximates x^(1.0/2.2)

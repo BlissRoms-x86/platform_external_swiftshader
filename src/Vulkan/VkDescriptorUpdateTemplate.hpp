@@ -20,16 +20,16 @@
 namespace vk
 {
 	class DescriptorSetLayout;
+	class Device;
 
 	class DescriptorUpdateTemplate : public Object<DescriptorUpdateTemplate, VkDescriptorUpdateTemplate>
 	{
 	public:
 		DescriptorUpdateTemplate(const VkDescriptorUpdateTemplateCreateInfo* pCreateInfo, void* mem);
-		~DescriptorUpdateTemplate() = delete;
 
 		static size_t ComputeRequiredAllocationSize(const VkDescriptorUpdateTemplateCreateInfo* info);
 
-		void updateDescriptorSet(VkDescriptorSet descriptorSet, const void* pData);
+		void updateDescriptorSet(Device* device, VkDescriptorSet descriptorSet, const void* pData);
 
 	private:
 		uint32_t                              descriptorUpdateEntryCount = 0;
@@ -39,7 +39,7 @@ namespace vk
 
 	static inline DescriptorUpdateTemplate* Cast(VkDescriptorUpdateTemplate object)
 	{
-		return reinterpret_cast<DescriptorUpdateTemplate*>(object);
+		return DescriptorUpdateTemplate::Cast(object);
 	}
 
 } // namespace vk

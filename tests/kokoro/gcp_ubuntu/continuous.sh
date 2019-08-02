@@ -11,15 +11,22 @@ git submodule update --init
 
 mkdir -p build && cd build
 
-cmake ..
+if [[ -z "${REACTOR_BACKEND}" ]]; then
+  REACTOR_BACKEND="LLVM"
+fi
+
+cmake .. "-DREACTOR_BACKEND=${REACTOR_BACKEND}" "-DREACTOR_VERIFY_LLVM_IR=1"
 make --jobs=$(nproc)
 
 # Run the reactor unit tests.
 ./ReactorUnitTests
 
-# Run the GLES unit tests. TODO(capn): rename.
-./unittests
+cd .. # Tests must be run from project root
 
-# Run the Vulkan unit tests.
-cd .. # Must be run from project root
-build/vk-unittests
+# Run the OpenGL ES and Vulkan unit tests.
+build/gles-unittests
+
+if [ "${REACTOR_BACKEND}" != "Subzero" ]; then
+  # Currently vulkan does not work with Subzero.
+  build/vk-unittests
+fi

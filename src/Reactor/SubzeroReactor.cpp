@@ -13,6 +13,7 @@
 // limitations under the License.
 
 #include "Reactor.hpp"
+#include "Debug.hpp"
 
 #include "Optimizer.hpp"
 #include "ExecutableMemory.hpp"
@@ -51,10 +52,21 @@
 #include <mutex>
 #include <limits>
 #include <iostream>
-#include <cassert>
 
 namespace
 {
+	// Default configuration settings. Must be accessed under mutex lock.
+	std::mutex defaultConfigLock;
+	rr::Config &defaultConfig()
+	{
+		// This uses a static in a function to avoid the cost of a global static
+		// initializer. See http://neugierig.org/software/chromium/notes/2011/08/static-initializers.html
+		static rr::Config config = rr::Config::Edit()
+			.set(rr::Optimization::Level::Default)
+			.apply({});
+		return config;
+	}
+
 	Ice::GlobalContext *context = nullptr;
 	Ice::Cfg *function = nullptr;
 	Ice::CfgNode *basicBlock = nullptr;
@@ -76,6 +88,19 @@ namespace
 	#if !defined(__x86_64__) && (defined(_M_AMD64) || defined (_M_X64))
 		#define __x86_64__ 1
 	#endif
+
+	static Ice::OptLevel toIce(rr::Optimization::Level level)
+	{
+		switch (level)
+		{
+			case rr::Optimization::Level::None:       return Ice::Opt_0;
+			case rr::Optimization::Level::Less:       return Ice::Opt_1;
+			case rr::Optimization::Level::Default:    return Ice::Opt_2;
+			case rr::Optimization::Level::Aggressive: return Ice::Opt_2;
+			default: UNREACHABLE("Unknown Optimization Level %d", int(level));
+		}
+		return Ice::Opt_2;
+	}
 
 	class CPUID
 	{
@@ -133,6 +158,12 @@ namespace
 
 namespace rr
 {
+	const Capabilities Caps =
+	{
+		false, // CallSupported
+		false, // CoroutinesSupported
+	};
+
 	enum EmulatedType
 	{
 		EmulatedShift = 16,
@@ -191,14 +222,12 @@ namespace rr
 			case Type_v8i8:  return 8;
 			case Type_v4i8:  return 4;
 			case Type_v2f32: return 8;
-			default: assert(false);
+			default: ASSERT(false);
 			}
 		}
 
 		return Ice::typeWidthInBytes(T(type));
 	}
-
-	Optimization optimization[10] = {InstructionCombining, Disabled};
 
 	using ElfHeader = std::conditional<sizeof(void*) == 8, Elf64_Ehdr, Elf32_Ehdr>::type;
 	using SectionHeader = std::conditional<sizeof(void*) == 8, Elf64_Shdr, Elf32_Shdr>::type;
@@ -229,7 +258,7 @@ namespace rr
 			uint32_t symtab_entries = symbolTable->sh_size / symbolTable->sh_entsize;
 			if(index >= symtab_entries)
 			{
-				assert(index < symtab_entries && "Symbol Index out of range");
+				ASSERT(index < symtab_entries && "Symbol Index out of range");
 				return nullptr;
 			}
 
@@ -272,7 +301,7 @@ namespace rr
 				}
 				break;
 			default:
-				assert(false && "Unsupported relocation type");
+				ASSERT(false && "Unsupported relocation type");
 				return nullptr;
 			}
 		}
@@ -290,7 +319,7 @@ namespace rr
 		//		*patchSite = (int32_t)((intptr_t)symbolValue + *patchSite - (intptr_t)patchSite);
 		//		break;
 			default:
-				assert(false && "Unsupported relocation type");
+				ASSERT(false && "Unsupported relocation type");
 				return nullptr;
 			}
 		}
@@ -314,7 +343,7 @@ namespace rr
 			uint32_t symtab_entries = symbolTable->sh_size / symbolTable->sh_entsize;
 			if(index >= symtab_entries)
 			{
-				assert(index < symtab_entries && "Symbol Index out of range");
+				ASSERT(index < symtab_entries && "Symbol Index out of range");
 				return nullptr;
 			}
 
@@ -352,7 +381,7 @@ namespace rr
 			*patchSite32 = (int32_t)((intptr_t)symbolValue + *patchSite32 + relocation.r_addend);
 			break;
 		default:
-			assert(false && "Unsupported relocation type");
+			ASSERT(false && "Unsupported relocation type");
 			return nullptr;
 		}
 
@@ -369,17 +398,17 @@ namespace rr
 		}
 
 		// Expect ELF bitness to match platform
-		assert(sizeof(void*) == 8 ? elfHeader->getFileClass() == ELFCLASS64 : elfHeader->getFileClass() == ELFCLASS32);
+		ASSERT(sizeof(void*) == 8 ? elfHeader->getFileClass() == ELFCLASS64 : elfHeader->getFileClass() == ELFCLASS32);
 		#if defined(__i386__)
-			assert(sizeof(void*) == 4 && elfHeader->e_machine == EM_386);
+			ASSERT(sizeof(void*) == 4 && elfHeader->e_machine == EM_386);
 		#elif defined(__x86_64__)
-			assert(sizeof(void*) == 8 && elfHeader->e_machine == EM_X86_64);
+			ASSERT(sizeof(void*) == 8 && elfHeader->e_machine == EM_X86_64);
 		#elif defined(__arm__)
-			assert(sizeof(void*) == 4 && elfHeader->e_machine == EM_ARM);
+			ASSERT(sizeof(void*) == 4 && elfHeader->e_machine == EM_ARM);
 		#elif defined(__aarch64__)
-			assert(sizeof(void*) == 8 && elfHeader->e_machine == EM_AARCH64);
+			ASSERT(sizeof(void*) == 8 && elfHeader->e_machine == EM_AARCH64);
 		#elif defined(__mips__)
-			assert(sizeof(void*) == 4 && elfHeader->e_machine == EM_MIPS);
+			ASSERT(sizeof(void*) == 4 && elfHeader->e_machine == EM_MIPS);
 		#else
 			#error "Unsupported platform"
 		#endif
@@ -399,7 +428,7 @@ namespace rr
 			}
 			else if(sectionHeader[i].sh_type == SHT_REL)
 			{
-				assert(sizeof(void*) == 4 && "UNIMPLEMENTED");   // Only expected/implemented for 32-bit code
+				ASSERT(sizeof(void*) == 4 && "UNIMPLEMENTED");   // Only expected/implemented for 32-bit code
 
 				for(Elf32_Word index = 0; index < sectionHeader[i].sh_size / sectionHeader[i].sh_entsize; index++)
 				{
@@ -409,7 +438,7 @@ namespace rr
 			}
 			else if(sectionHeader[i].sh_type == SHT_RELA)
 			{
-				assert(sizeof(void*) == 8 && "UNIMPLEMENTED");   // Only expected/implemented for 64-bit code
+				ASSERT(sizeof(void*) == 8 && "UNIMPLEMENTED");   // Only expected/implemented for 64-bit code
 
 				for(Elf32_Word index = 0; index < sectionHeader[i].sh_size / sectionHeader[i].sh_entsize; index++)
 				{
@@ -425,8 +454,8 @@ namespace rr
 	template<typename T>
 	struct ExecutableAllocator
 	{
-		ExecutableAllocator() {};
-		template<class U> ExecutableAllocator(const ExecutableAllocator<U> &other) {};
+		ExecutableAllocator() {}
+		template<class U> ExecutableAllocator(const ExecutableAllocator<U> &other) {}
 
 		using value_type = T;
 		using size_type = std::size_t;
@@ -477,7 +506,7 @@ namespace rr
 				buffer[position] = Value;
 				position++;
 			}
-			else assert(false && "UNIMPLEMENTED");
+			else ASSERT(false && "UNIMPLEMENTED");
 		}
 
 		void writeBytes(llvm::StringRef Bytes) override
@@ -492,8 +521,9 @@ namespace rr
 
 		void seek(uint64_t Off) override { position = Off; }
 
-		const void *getEntry() override
+		const void *getEntry(int index) override
 		{
+			ASSERT(index == 0); // Subzero does not support multiple entry points per routine yet.
 			if(!entry)
 			{
 				position = std::numeric_limits<std::size_t>::max();   // Can't stream more data after this
@@ -541,7 +571,7 @@ namespace rr
 			Flags.setTargetInstructionSet(CPUID::SSE4_1 ? Ice::X86InstructionSet_SSE4_1 : Ice::X86InstructionSet_SSE2);
 		#endif
 		Flags.setOutFileType(Ice::FT_Elf);
-		Flags.setOptLevel(Ice::Opt_2);
+		Flags.setOptLevel(toIce(getDefaultConfig().getOptimization().getLevel()));
 		Flags.setApplicationBinaryInterface(Ice::ABI_Platform);
 		Flags.setVerbose(false ? Ice::IceV_Most : Ice::IceV_None);
 		Flags.setDisableHybridAssembly(true);
@@ -578,7 +608,26 @@ namespace rr
 		::codegenMutex.unlock();
 	}
 
-	Routine *Nucleus::acquireRoutine(const char *name, bool runOptimizations)
+	void Nucleus::setDefaultConfig(const Config &cfg)
+	{
+		std::unique_lock<std::mutex> lock(::defaultConfigLock);
+		::defaultConfig() = cfg;
+	}
+
+	void Nucleus::adjustDefaultConfig(const Config::Edit &cfgEdit)
+	{
+		std::unique_lock<std::mutex> lock(::defaultConfigLock);
+		auto &config = ::defaultConfig();
+		config = cfgEdit.apply(config);
+	}
+
+	Config Nucleus::getDefaultConfig()
+	{
+		std::unique_lock<std::mutex> lock(::defaultConfigLock);
+		return ::defaultConfig();
+	}
+
+	std::shared_ptr<Routine> Nucleus::acquireRoutine(const char *name, const Config::Edit &cfgEdit /* = Config::Edit::None */)
 	{
 		if(basicBlock->getInsts().empty() || basicBlock->getInsts().back().getKind() != Ice::Inst::Ret)
 		{
@@ -587,10 +636,10 @@ namespace rr
 
 		::function->setFunctionName(Ice::GlobalString::createWithString(::context, name));
 
-		optimize();
+		rr::optimize(::function);
 
 		::function->translate();
-		assert(!::function->hasError());
+		ASSERT(!::function->hasError());
 
 		auto globals = ::function->getGlobalInits();
 
@@ -614,12 +663,7 @@ namespace rr
 		Routine *handoffRoutine = ::routine;
 		::routine = nullptr;
 
-		return handoffRoutine;
-	}
-
-	void Nucleus::optimize()
-	{
-		rr::optimize(::function);
+		return std::shared_ptr<Routine>(handoffRoutine);
 	}
 
 	Value *Nucleus::allocateStackVariable(Type *t, int arraySize)
@@ -648,7 +692,7 @@ namespace rr
 
 	void Nucleus::setInsertBlock(BasicBlock *basicBlock)
 	{
-	//	assert(::basicBlock->getInsts().back().getTerminatorEdges().size() >= 0 && "Previous basic block must have a terminator");
+	//	ASSERT(::basicBlock->getInsts().back().getTerminatorEdges().size() >= 0 && "Previous basic block must have a terminator");
 
 		Variable::materializeAll();
 
@@ -734,7 +778,7 @@ namespace rr
 
 	static Value *createArithmetic(Ice::InstArithmetic::OpKind op, Value *lhs, Value *rhs)
 	{
-		assert(lhs->getType() == rhs->getType() || llvm::isa<Ice::Constant>(rhs));
+		ASSERT(lhs->getType() == rhs->getType() || llvm::isa<Ice::Constant>(rhs));
 
 		bool swapOperands = llvm::isa<Ice::Constant>(lhs) && isCommutative(op);
 
@@ -865,8 +909,8 @@ namespace rr
 
 	Value *Nucleus::createLoad(Value *ptr, Type *type, bool isVolatile, unsigned int align, bool atomic, std::memory_order memoryOrder)
 	{
-		assert(!atomic);  // Unimplemented
-		assert(memoryOrder == std::memory_order_relaxed);  // Unimplemented
+		ASSERT(!atomic);  // Unimplemented
+		ASSERT(memoryOrder == std::memory_order_relaxed);  // Unimplemented
 
 		int valueType = (int)reinterpret_cast<intptr_t>(type);
 		Ice::Variable *result = ::function->makeVariable(T(type));
@@ -899,7 +943,7 @@ namespace rr
 					auto bitcast = Ice::InstCast::create(::function, Ice::InstCast::Bitcast, result, vector.loadValue());
 					::basicBlock->appendInst(bitcast);
 				}
-				else assert(false);
+				else UNREACHABLE("typeSize(type): %d", int(typeSize(type)));
 			}
 			else
 			{
@@ -922,8 +966,8 @@ namespace rr
 
 	Value *Nucleus::createStore(Value *value, Value *ptr, Type *type, bool isVolatile, unsigned int align, bool atomic, std::memory_order memoryOrder)
 	{
-		assert(!atomic);  // Unimplemented
-		assert(memoryOrder == std::memory_order_relaxed);  // Unimplemented
+		ASSERT(!atomic);  // Unimplemented
+		ASSERT(memoryOrder == std::memory_order_relaxed);  // Unimplemented
 
 		#if __has_feature(memory_sanitizer)
 			// Mark all (non-stack) memory writes as initialized by calling __msan_unpoison
@@ -968,7 +1012,7 @@ namespace rr
 					Int y = Extract(v, 1);
 					*Pointer<Int>(pointer + 4) = y;
 				}
-				else assert(false);
+				else UNREACHABLE("typeSize(type): %d", int(typeSize(type)));
 			}
 			else
 			{
@@ -983,7 +1027,7 @@ namespace rr
 		}
 		else
 		{
-			assert(value->getType() == T(type));
+			ASSERT(value->getType() == T(type));
 
 			auto store = Ice::InstStore::create(::function, value, ptr, align);
 			::basicBlock->appendInst(store);
@@ -994,7 +1038,7 @@ namespace rr
 
 	Value *Nucleus::createGEP(Value *ptr, Type *type, Value *index, bool unsignedIndex)
 	{
-		assert(index->getType() == Ice::IceType_i32);
+		ASSERT(index->getType() == Ice::IceType_i32);
 
 		if(auto *constant = llvm::dyn_cast<Ice::ConstantInteger32>(index))
 		{
@@ -1028,9 +1072,70 @@ namespace rr
 		return createAdd(ptr, index);
 	}
 
-	Value *Nucleus::createAtomicAdd(Value *ptr, Value *value)
+	Value *Nucleus::createAtomicAdd(Value *ptr, Value *value, std::memory_order memoryOrder)
 	{
-		assert(false && "UNIMPLEMENTED"); return nullptr;
+		UNIMPLEMENTED("createAtomicAdd");
+		return nullptr;
+	}
+
+	Value *Nucleus::createAtomicSub(Value *ptr, Value *value, std::memory_order memoryOrder)
+	{
+		UNIMPLEMENTED("createAtomicSub");
+		return nullptr;
+	}
+
+	Value *Nucleus::createAtomicAnd(Value *ptr, Value *value, std::memory_order memoryOrder)
+	{
+		UNIMPLEMENTED("createAtomicAnd");
+		return nullptr;
+	}
+
+	Value *Nucleus::createAtomicOr(Value *ptr, Value *value, std::memory_order memoryOrder)
+	{
+		UNIMPLEMENTED("createAtomicOr");
+		return nullptr;
+	}
+
+	Value *Nucleus::createAtomicXor(Value *ptr, Value *value, std::memory_order memoryOrder)
+	{
+		UNIMPLEMENTED("createAtomicXor");
+		return nullptr;
+	}
+
+	Value *Nucleus::createAtomicMin(Value *ptr, Value *value, std::memory_order memoryOrder)
+	{
+		UNIMPLEMENTED("createAtomicMin");
+		return nullptr;
+	}
+
+	Value *Nucleus::createAtomicMax(Value *ptr, Value *value, std::memory_order memoryOrder)
+	{
+		UNIMPLEMENTED("createAtomicMax");
+		return nullptr;
+	}
+
+	Value *Nucleus::createAtomicUMin(Value *ptr, Value *value, std::memory_order memoryOrder)
+	{
+		UNIMPLEMENTED("createAtomicUMin");
+		return nullptr;
+	}
+
+	Value *Nucleus::createAtomicUMax(Value *ptr, Value *value, std::memory_order memoryOrder)
+	{
+		UNIMPLEMENTED("createAtomicUMax");
+		return nullptr;
+	}
+
+	Value *Nucleus::createAtomicExchange(Value *ptr, Value *value, std::memory_order memoryOrder)
+	{
+		UNIMPLEMENTED("createAtomicExchange");
+		return nullptr;
+	}
+
+	Value *Nucleus::createAtomicCompareExchange(Value *ptr, Value *value, Value *compare, std::memory_order memoryOrderEqual, std::memory_order memoryOrderUnequal)
+	{
+		UNIMPLEMENTED("createAtomicCompareExchange");
+		return nullptr;
 	}
 
 	static Value *createCast(Ice::InstCast::OpKind op, Value *v, Type *destType)
@@ -1108,13 +1213,18 @@ namespace rr
 
 	static Value *createIntCompare(Ice::InstIcmp::ICond condition, Value *lhs, Value *rhs)
 	{
-		assert(lhs->getType() == rhs->getType());
+		ASSERT(lhs->getType() == rhs->getType());
 
 		auto result = ::function->makeVariable(Ice::isScalarIntegerType(lhs->getType()) ? Ice::IceType_i1 : lhs->getType());
 		auto cmp = Ice::InstIcmp::create(::function, condition, result, lhs, rhs);
 		::basicBlock->appendInst(cmp);
 
 		return V(result);
+	}
+
+	Value *Nucleus::createPtrEQ(Value *lhs, Value *rhs)
+	{
+		return createIntCompare(Ice::InstIcmp::Eq, lhs, rhs);
 	}
 
 	Value *Nucleus::createICmpEQ(Value *lhs, Value *rhs)
@@ -1169,8 +1279,8 @@ namespace rr
 
 	static Value *createFloatCompare(Ice::InstFcmp::FCond condition, Value *lhs, Value *rhs)
 	{
-		assert(lhs->getType() == rhs->getType());
-		assert(Ice::isScalarFloatingType(lhs->getType()) || lhs->getType() == Ice::IceType_v4f32);
+		ASSERT(lhs->getType() == rhs->getType());
+		ASSERT(Ice::isScalarFloatingType(lhs->getType()) || lhs->getType() == Ice::IceType_v4f32);
 
 		auto result = ::function->makeVariable(Ice::isScalarFloatingType(lhs->getType()) ? Ice::IceType_i1 : Ice::IceType_v4i32);
 		auto cmp = Ice::InstFcmp::create(::function, condition, result, lhs, rhs);
@@ -1269,7 +1379,7 @@ namespace rr
 
 	Value *Nucleus::createShuffleVector(Value *V1, Value *V2, const int *select)
 	{
-		assert(V1->getType() == V2->getType());
+		ASSERT(V1->getType() == V2->getType());
 
 		int size = Ice::typeNumElements(V1->getType());
 		auto result = ::function->makeVariable(V1->getType());
@@ -1287,7 +1397,7 @@ namespace rr
 
 	Value *Nucleus::createSelect(Value *C, Value *ifTrue, Value *ifFalse)
 	{
-		assert(ifTrue->getType() == ifFalse->getType());
+		ASSERT(ifTrue->getType() == ifFalse->getType());
 
 		auto result = ::function->makeVariable(ifTrue->getType());
 		auto *select = Ice::InstSelect::create(::function, result, C, ifTrue, ifFalse);
@@ -1331,7 +1441,7 @@ namespace rr
 	{
 		if(Ice::isVectorType(T(Ty)))
 		{
-			assert(Ice::typeNumElements(T(Ty)) <= 16);
+			ASSERT(Ice::typeNumElements(T(Ty)) <= 16);
 			int64_t c[16] = {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0};
 			return createConstantVector(c, Ty);
 		}
@@ -1394,7 +1504,7 @@ namespace rr
 	Value *Nucleus::createConstantVector(const int64_t *constants, Type *type)
 	{
 		const int vectorSize = 16;
-		assert(Ice::typeWidthInBytes(T(type)) == vectorSize);
+		ASSERT(Ice::typeWidthInBytes(T(type)) == vectorSize);
 		const int alignment = vectorSize;
 		auto globalPool = ::function->getGlobalPool();
 
@@ -1471,7 +1581,7 @@ namespace rr
 			}
 			break;
 		default:
-			assert(false && "Unknown constant vector type" && type);
+			UNREACHABLE("Unknown constant vector type: %d", (int)reinterpret_cast<intptr_t>(type));
 		}
 
 		auto name = Ice::GlobalString::createWithoutString(::context);
@@ -1839,7 +1949,7 @@ namespace rr
 
 	Short4::Short4(RValue<Float4> cast)
 	{
-		assert(false && "UNIMPLEMENTED");
+		UNIMPLEMENTED("Short4::Short4(RValue<Float4> cast)");
 	}
 
 	RValue<Short4> operator<<(RValue<Short4> lhs, unsigned char rhs)
@@ -2317,7 +2427,8 @@ namespace rr
 
 	RValue<UShort4> Average(RValue<UShort4> x, RValue<UShort4> y)
 	{
-		assert(false && "UNIMPLEMENTED"); return RValue<UShort4>(V(nullptr));
+		UNIMPLEMENTED("RValue<UShort4> Average(RValue<UShort4> x, RValue<UShort4> y)");
+		return UShort4(0);
 	}
 
 	Type *UShort4::getType()
@@ -2381,12 +2492,14 @@ namespace rr
 
 	RValue<Int4> MulAdd(RValue<Short8> x, RValue<Short8> y)
 	{
-		assert(false && "UNIMPLEMENTED"); return RValue<Int4>(V(nullptr));
+		UNIMPLEMENTED("RValue<Int4> MulAdd(RValue<Short8> x, RValue<Short8> y)");
+		return Int4(0);
 	}
 
 	RValue<Short8> MulHigh(RValue<Short8> x, RValue<Short8> y)
 	{
-		assert(false && "UNIMPLEMENTED"); return RValue<Short8>(V(nullptr));
+		UNIMPLEMENTED("RValue<Short8> MulHigh(RValue<Short8> x, RValue<Short8> y)");
+		return Short8(0);
 	}
 
 	Type *Short8::getType()
@@ -2450,18 +2563,20 @@ namespace rr
 
 	RValue<UShort8> Swizzle(RValue<UShort8> x, char select0, char select1, char select2, char select3, char select4, char select5, char select6, char select7)
 	{
-		assert(false && "UNIMPLEMENTED"); return RValue<UShort8>(V(nullptr));
+		UNIMPLEMENTED("RValue<UShort8> Swizzle(RValue<UShort8> x, char select0, char select1, char select2, char select3, char select4, char select5, char select6, char select7)");
+		return UShort8(0);
 	}
 
 	RValue<UShort8> MulHigh(RValue<UShort8> x, RValue<UShort8> y)
 	{
-		assert(false && "UNIMPLEMENTED"); return RValue<UShort8>(V(nullptr));
+		UNIMPLEMENTED("RValue<UShort8> MulHigh(RValue<UShort8> x, RValue<UShort8> y)");
+		return UShort8(0);
 	}
 
 	// FIXME: Implement as Shuffle(x, y, Select(i0, ..., i16)) and Shuffle(x, y, SELECT_PACK_REPEAT(element))
 //	RValue<UShort8> PackRepeat(RValue<Byte16> x, RValue<Byte16> y, int element)
 //	{
-//		assert(false && "UNIMPLEMENTED"); return RValue<UShort8>(V(nullptr));
+//		ASSERT(false && "UNIMPLEMENTED"); return RValue<UShort8>(V(nullptr));
 //	}
 
 	Type *UShort8::getType()
@@ -2569,7 +2684,7 @@ namespace rr
 
 //	RValue<UInt> RoundUInt(RValue<Float> cast)
 //	{
-//		assert(false && "UNIMPLEMENTED"); return RValue<UInt>(V(nullptr));
+//		ASSERT(false && "UNIMPLEMENTED"); return RValue<UInt>(V(nullptr));
 //	}
 
 	Type *UInt::getType()
@@ -2626,16 +2741,6 @@ namespace rr
 	Type *Int2::getType()
 	{
 		return T(Type_v2i32);
-	}
-
-	RValue<UInt> Extract(RValue<UInt2> val, int i)
-	{
-		return RValue<UInt>(Nucleus::createExtractElement(val.value, UInt::getType(), i));
-	}
-
-	RValue<UInt2> Insert(RValue<UInt2> val, RValue<UInt> element, int i)
-	{
-		return RValue<UInt2>(Nucleus::createInsertElement(val.value, element.value, i));
 	}
 
 	RValue<UInt2> operator<<(RValue<UInt2> lhs, unsigned char rhs)
@@ -2944,14 +3049,14 @@ namespace rr
 		storeValue((~(As<Int4>(cast) >> 31) & uiValue).value);
 	}
 
-	RValue<UInt> Extract(RValue<UInt4> x, int i)
+	UInt4::UInt4(RValue<UInt> rhs) : XYZW(this)
 	{
-		return RValue<UInt>(Nucleus::createExtractElement(x.value, UInt::getType(), i));
-	}
+		Value *vector = Nucleus::createBitCast(rhs.value, UInt4::getType());
 
-	RValue<UInt4> Insert(RValue<UInt4> x, RValue<UInt> element, int i)
-	{
-		return RValue<UInt4>(Nucleus::createInsertElement(x.value, element.value, i));
+		int swizzle[4] = {0, 0, 0, 0};
+		Value *replicate = Nucleus::createShuffleVector(vector, vector, swizzle);
+
+		storeValue(replicate);
 	}
 
 	RValue<UInt4> operator<<(RValue<UInt4> lhs, unsigned char rhs)
@@ -3376,6 +3481,74 @@ namespace rr
 
 	RValue<Long> Ticks()
 	{
-		assert(false && "UNIMPLEMENTED"); return RValue<Long>(V(nullptr));
+		UNIMPLEMENTED("RValue<Long> Ticks()");
+		return Long(Int(0));
 	}
+
+	RValue<Pointer<Byte>> ConstantPointer(void const * ptr)
+	{
+		return RValue<Pointer<Byte>>(V(::context->getConstantInt64(reinterpret_cast<intptr_t>(ptr))));
+	}
+
+	Value* Call(RValue<Pointer<Byte>> fptr, Type* retTy, std::initializer_list<Value*> args, std::initializer_list<Type*> argTys)
+	{
+		// FIXME: This does not currently work on Windows.
+		Ice::Variable *ret = nullptr;
+		if (retTy != nullptr)
+		{
+			ret = ::function->makeVariable(T(retTy));
+		}
+		auto call = Ice::InstCall::create(::function, args.size(), ret, V(fptr.value), false);
+		for (auto arg : args)
+		{
+			call->addArg(V(arg));
+		}
+		::basicBlock->appendInst(call);
+		return V(ret);
+	}
+
+	void Breakpoint()
+	{
+		const Ice::Intrinsics::IntrinsicInfo intrinsic = {Ice::Intrinsics::Trap, Ice::Intrinsics::SideEffects_F, Ice::Intrinsics::ReturnsTwice_F, Ice::Intrinsics::MemoryWrite_F};
+		auto target = ::context->getConstantUndef(Ice::IceType_i32);
+		auto trap = Ice::InstIntrinsicCall::create(::function, 0, nullptr, target, intrinsic);
+		::basicBlock->appendInst(trap);
+	}
+
+	// Below are functions currently unimplemented for the Subzero backend.
+	// They are stubbed to satisfy the linker.
+	void Nucleus::createFence(std::memory_order memoryOrder) { UNIMPLEMENTED("Subzero createFence()"); }
+	Value *Nucleus::createMaskedLoad(Value *ptr, Type *elTy, Value *mask, unsigned int alignment, bool zeroMaskedLanes) { UNIMPLEMENTED("Subzero createMaskedLoad()"); return nullptr; }
+	void Nucleus::createMaskedStore(Value *ptr, Value *val, Value *mask, unsigned int alignment) { UNIMPLEMENTED("Subzero createMaskedStore()"); }
+	Value *Nucleus::createGather(Value *base, Type *elTy, Value *offsets, Value *mask, unsigned int alignment, bool zeroMaskedLanes) { UNIMPLEMENTED("Subzero createGather()"); return nullptr; }
+	void Nucleus::createScatter(Value *base, Value *val, Value *offsets, Value *mask, unsigned int alignment) { UNIMPLEMENTED("Subzero createScatter()"); }
+	RValue<Float4> Sin(RValue<Float4> x) { UNIMPLEMENTED("Subzero Sin()"); return Float4(0); }
+	RValue<Float4> Cos(RValue<Float4> x) { UNIMPLEMENTED("Subzero Cos()"); return Float4(0); }
+	RValue<Float4> Tan(RValue<Float4> x) { UNIMPLEMENTED("Subzero Tan()"); return Float4(0); }
+	RValue<Float4> Asin(RValue<Float4> x) { UNIMPLEMENTED("Subzero Asin()"); return Float4(0); }
+	RValue<Float4> Acos(RValue<Float4> x) { UNIMPLEMENTED("Subzero Acos()"); return Float4(0); }
+	RValue<Float4> Atan(RValue<Float4> x) { UNIMPLEMENTED("Subzero Atan()"); return Float4(0); }
+	RValue<Float4> Sinh(RValue<Float4> x) { UNIMPLEMENTED("Subzero Sinh()"); return Float4(0); }
+	RValue<Float4> Cosh(RValue<Float4> x) { UNIMPLEMENTED("Subzero Cosh()"); return Float4(0); }
+	RValue<Float4> Tanh(RValue<Float4> x) { UNIMPLEMENTED("Subzero Tanh()"); return Float4(0); }
+	RValue<Float4> Asinh(RValue<Float4> x) { UNIMPLEMENTED("Subzero Asinh()"); return Float4(0); }
+	RValue<Float4> Acosh(RValue<Float4> x) { UNIMPLEMENTED("Subzero Acosh()"); return Float4(0); }
+	RValue<Float4> Atanh(RValue<Float4> x) { UNIMPLEMENTED("Subzero Atanh()"); return Float4(0); }
+	RValue<Float4> Atan2(RValue<Float4> x, RValue<Float4> y) { UNIMPLEMENTED("Subzero Atan2()"); return Float4(0); }
+	RValue<Float4> Pow(RValue<Float4> x, RValue<Float4> y) { UNIMPLEMENTED("Subzero Pow()"); return Float4(0); }
+	RValue<Float4> Exp(RValue<Float4> x) { UNIMPLEMENTED("Subzero Exp()"); return Float4(0); }
+	RValue<Float4> Log(RValue<Float4> x) { UNIMPLEMENTED("Subzero Log()"); return Float4(0); }
+	RValue<Float4> Exp2(RValue<Float4> x) { UNIMPLEMENTED("Subzero Exp2()"); return Float4(0); }
+	RValue<Float4> Log2(RValue<Float4> x) { UNIMPLEMENTED("Subzero Log2()"); return Float4(0); }
+	RValue<UInt4> Ctlz(RValue<UInt4> x, bool isZeroUndef) { UNIMPLEMENTED("Subzero Ctlz()"); return UInt4(0); }
+	RValue<UInt4> Cttz(RValue<UInt4> x, bool isZeroUndef) { UNIMPLEMENTED("Subzero Cttz()"); return UInt4(0); }
+
+	void EmitDebugLocation() {}
+	void EmitDebugVariable(Value* value) {}
+	void FlushDebug() {}
+
+	void Nucleus::createCoroutine(Type *YieldType, std::vector<Type*> &Params) { UNIMPLEMENTED("createCoroutine"); }
+	std::shared_ptr<Routine> Nucleus::acquireCoroutine(const char *name, const Config::Edit &cfgEdit /* = Config::Edit::None */) { UNIMPLEMENTED("acquireCoroutine"); return nullptr; }
+	void Nucleus::yield(Value* val) { UNIMPLEMENTED("Yield"); }
+
 }

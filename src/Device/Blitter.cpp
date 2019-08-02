@@ -19,36 +19,40 @@
 #include "System/Memory.hpp"
 #include "Vulkan/VkDebug.hpp"
 #include "Vulkan/VkImage.hpp"
+#include "Vulkan/VkBuffer.hpp"
 
 #include <utility>
 
 namespace sw
 {
-	Blitter::Blitter()
+	Blitter::Blitter() :
+		blitMutex(),
+		blitCache(1024),
+		cornerUpdateMutex(),
+		cornerUpdateCache(64) // We only need one of these per format
 	{
-		blitCache = new RoutineCache<State>(1024);
 	}
 
 	Blitter::~Blitter()
 	{
-		delete blitCache;
 	}
 
-	void Blitter::clear(void *pixel, vk::Format format, vk::Image *dest, const VkImageSubresourceRange& subresourceRange, const VkRect2D* renderArea)
+	void Blitter::clear(void *pixel, vk::Format format, vk::Image *dest, const vk::Format& viewFormat, const VkImageSubresourceRange& subresourceRange, const VkRect2D* renderArea)
 	{
 		VkImageAspectFlagBits aspect = static_cast<VkImageAspectFlagBits>(subresourceRange.aspectMask);
-		if(dest->getFormat(aspect) == VK_FORMAT_UNDEFINED)
+		vk::Format dstFormat = viewFormat.getAspectFormat(aspect);
+		if(dstFormat == VK_FORMAT_UNDEFINED)
 		{
 			return;
 		}
 
-		if(fastClear(pixel, format, dest, subresourceRange, renderArea))
+		if(fastClear(pixel, format, dest, dstFormat, subresourceRange, renderArea))
 		{
 			return;
 		}
 
-		State state(format, dest->getFormat(aspect), 1, dest->getSampleCountFlagBits(), { 0xF });
-		Routine *blitRoutine = getRoutine(state);
+		State state(format, dstFormat, 1, dest->getSampleCountFlagBits(), { 0xF });
+		auto blitRoutine = getBlitRoutine(state);
 		if(!blitRoutine)
 		{
 			return;
@@ -76,7 +80,7 @@ namespace sw
 
 		for(; subresLayers.mipLevel <= lastMipLevel; subresLayers.mipLevel++)
 		{
-			VkExtent3D extent = dest->getMipLevelExtent(subresLayers.mipLevel);
+			VkExtent3D extent = dest->getMipLevelExtent(aspect, subresLayers.mipLevel);
 			if(!renderArea)
 			{
 				area.extent.width = extent.width;
@@ -100,19 +104,33 @@ namespace sw
 				0, 0, // sWidth, sHeight
 			};
 
-			for(subresLayers.baseArrayLayer = subresourceRange.baseArrayLayer; subresLayers.baseArrayLayer <= lastLayer; subresLayers.baseArrayLayer++)
+			if (renderArea && dest->is3DSlice())
 			{
-				for(uint32_t depth = 0; depth < extent.depth; depth++)
+				// Reinterpret layers as depth slices
+				subresLayers.baseArrayLayer = 0;
+				subresLayers.layerCount = 1;
+				for (uint32_t depth = subresourceRange.baseArrayLayer; depth <= lastLayer; depth++)
 				{
-					data.dest = dest->getTexelPointer({ 0, 0, static_cast<int32_t>(depth) }, subresLayers);
-
+					data.dest = dest->getTexelPointer({0, 0, static_cast<int32_t>(depth)}, subresLayers);
 					blitFunction(&data);
+				}
+			}
+			else
+			{
+				for(subresLayers.baseArrayLayer = subresourceRange.baseArrayLayer; subresLayers.baseArrayLayer <= lastLayer; subresLayers.baseArrayLayer++)
+				{
+					for(uint32_t depth = 0; depth < extent.depth; depth++)
+					{
+						data.dest = dest->getTexelPointer({ 0, 0, static_cast<int32_t>(depth) }, subresLayers);
+
+						blitFunction(&data);
+					}
 				}
 			}
 		}
 	}
 
-	bool Blitter::fastClear(void *pixel, vk::Format format, vk::Image *dest, const VkImageSubresourceRange& subresourceRange, const VkRect2D* renderArea)
+	bool Blitter::fastClear(void *pixel, vk::Format format, vk::Image *dest, const vk::Format& viewFormat, const VkImageSubresourceRange& subresourceRange, const VkRect2D* renderArea)
 	{
 		if(format != VK_FORMAT_R32G32B32A32_SFLOAT)
 		{
@@ -128,7 +146,7 @@ namespace sw
 		uint32_t packed;
 
 		VkImageAspectFlagBits aspect = static_cast<VkImageAspectFlagBits>(subresourceRange.aspectMask);
-		switch(dest->getFormat(aspect))
+		switch(viewFormat)
 		{
 		case VK_FORMAT_R5G6B5_UNORM_PACK16:
 			packed = ((uint16_t)(31 * b + 0.5f) << 0) |
@@ -185,11 +203,15 @@ namespace sw
 		{
 			int rowPitchBytes = dest->rowPitchBytes(aspect, subresLayers.mipLevel);
 			int slicePitchBytes = dest->slicePitchBytes(aspect, subresLayers.mipLevel);
-			VkExtent3D extent = dest->getMipLevelExtent(subresLayers.mipLevel);
+			VkExtent3D extent = dest->getMipLevelExtent(aspect, subresLayers.mipLevel);
 			if(!renderArea)
 			{
 				area.extent.width = extent.width;
 				area.extent.height = extent.height;
+			}
+			if(dest->is3DSlice())
+			{
+				extent.depth = 1; // The 3D image is instead interpreted as a 2D image with layers
 			}
 
 			for(subresLayers.baseArrayLayer = subresourceRange.baseArrayLayer; subresLayers.baseArrayLayer <= lastLayer; subresLayers.baseArrayLayer++)
@@ -203,18 +225,20 @@ namespace sw
 					{
 						uint8_t *d = slice;
 
-						switch(dest->getFormat(aspect).bytes())
+						switch(viewFormat.bytes())
 						{
 						case 2:
 							for(uint32_t i = 0; i < area.extent.height; i++)
 							{
-								sw::clear((uint16_t*)d, packed, area.extent.width);
+								ASSERT(d < dest->end());
+								sw::clear((uint16_t*)d, static_cast<uint16_t>(packed), area.extent.width);
 								d += rowPitchBytes;
 							}
 							break;
 						case 4:
 							for(uint32_t i = 0; i < area.extent.height; i++)
 							{
+								ASSERT(d < dest->end());
 								sw::clear((uint32_t*)d, packed, area.extent.width);
 								d += rowPitchBytes;
 							}
@@ -251,6 +275,7 @@ namespace sw
 			break;
 		case VK_FORMAT_R8_UNORM:
 		case VK_FORMAT_R8_UINT:
+		case VK_FORMAT_R8_SRGB:
 			c.x = Float(Int(*Pointer<Byte>(element)));
 			c.w = float(0xFF);
 			break;
@@ -309,6 +334,7 @@ namespace sw
 			break;
 		case VK_FORMAT_R8G8_UNORM:
 		case VK_FORMAT_R8G8_UINT:
+		case VK_FORMAT_R8G8_SRGB:
 			c.x = Float(Int(*Pointer<Byte>(element + 0)));
 			c.y = Float(Int(*Pointer<Byte>(element + 1)));
 			c.w = float(0xFF);
@@ -593,30 +619,30 @@ namespace sw
 		case VK_FORMAT_R8G8B8_SINT:
 		case VK_FORMAT_R8G8B8_SNORM:
 		case VK_FORMAT_R8G8B8_SSCALED:
-		case VK_FORMAT_R8G8B8_SRGB:
 			if(writeB) { *Pointer<SByte>(element + 2) = SByte(RoundInt(Float(c.z))); }
 		case VK_FORMAT_R8G8_SINT:
 		case VK_FORMAT_R8G8_SNORM:
 		case VK_FORMAT_R8G8_SSCALED:
-		case VK_FORMAT_R8G8_SRGB:
 			if(writeG) { *Pointer<SByte>(element + 1) = SByte(RoundInt(Float(c.y))); }
 		case VK_FORMAT_R8_SINT:
 		case VK_FORMAT_R8_SNORM:
 		case VK_FORMAT_R8_SSCALED:
-		case VK_FORMAT_R8_SRGB:
 			if(writeR) { *Pointer<SByte>(element) = SByte(RoundInt(Float(c.x))); }
 			break;
 		case VK_FORMAT_R8G8B8_UINT:
 		case VK_FORMAT_R8G8B8_UNORM:
 		case VK_FORMAT_R8G8B8_USCALED:
+		case VK_FORMAT_R8G8B8_SRGB:
 			if(writeB) { *Pointer<Byte>(element + 2) = Byte(RoundInt(Float(c.z))); }
 		case VK_FORMAT_R8G8_UINT:
 		case VK_FORMAT_R8G8_UNORM:
 		case VK_FORMAT_R8G8_USCALED:
+		case VK_FORMAT_R8G8_SRGB:
 			if(writeG) { *Pointer<Byte>(element + 1) = Byte(RoundInt(Float(c.y))); }
 		case VK_FORMAT_R8_UINT:
 		case VK_FORMAT_R8_UNORM:
 		case VK_FORMAT_R8_USCALED:
+		case VK_FORMAT_R8_SRGB:
 			if(writeR) { *Pointer<Byte>(element) = Byte(RoundInt(Float(c.x))); }
 			break;
 		case VK_FORMAT_R16G16B16A16_SINT:
@@ -1018,7 +1044,6 @@ namespace sw
 		case VK_FORMAT_B8G8R8A8_SSCALED:
 			if(writeA) { *Pointer<SByte>(element + 3) = SByte(Extract(c, 3)); }
 		case VK_FORMAT_B8G8R8_SINT:
-		case VK_FORMAT_B8G8R8_SRGB:
 		case VK_FORMAT_B8G8R8_SSCALED:
 			if(writeB) { *Pointer<SByte>(element) = SByte(Extract(c, 2)); }
 			if(writeG) { *Pointer<SByte>(element + 1) = SByte(Extract(c, 1)); }
@@ -1084,6 +1109,7 @@ namespace sw
 			if(writeA) { *Pointer<Byte>(element + 3) = Byte(Extract(c, 3)); }
 		case VK_FORMAT_B8G8R8_UINT:
 		case VK_FORMAT_B8G8R8_USCALED:
+		case VK_FORMAT_B8G8R8_SRGB:
 			if(writeB) { *Pointer<Byte>(element) = Byte(Extract(c, 2)); }
 			if(writeG) { *Pointer<Byte>(element + 1) = Byte(Extract(c, 1)); }
 			if(writeR) { *Pointer<Byte>(element + 2) = Byte(Extract(c, 0)); }
@@ -1273,12 +1299,12 @@ namespace sw
 		Int4 linear = CmpLT(c, Float4(0.04045f));
 
 		Float4 s = c;
-		s.xyz = As<Float4>((linear & As<Int4>(lc)) | (~linear & As<Int4>(ec)));   // FIXME: IfThenElse()
+		s.xyz = As<Float4>((linear & As<Int4>(lc)) | (~linear & As<Int4>(ec)));   // TODO: IfThenElse()
 
 		return s;
 	}
 
-	Routine *Blitter::generate(const State &state)
+	std::shared_ptr<Routine> Blitter::generate(const State &state)
 	{
 		Function<Void(Pointer<Byte>)> function;
 		{
@@ -1417,13 +1443,23 @@ namespace sw
 
 							if(state.srcSamples > 1) // Resolve multisampled source
 							{
+								if(state.convertSRGB && state.sourceFormat.isSRGBformat()) // sRGB -> RGB
+								{
+									if(!ApplyScaleAndClamp(color, state)) return nullptr;
+									preScaled = true;
+								}
 								Float4 accum = color;
-								for(int i = 1; i < state.srcSamples; i++)
+								for(int sample = 1; sample < state.srcSamples; sample++)
 								{
 									s += *Pointer<Int>(blit + OFFSET(BlitData, sSliceB));
 									if(!read(color, s, state))
 									{
 										return nullptr;
+									}
+									if(state.convertSRGB && state.sourceFormat.isSRGBformat()) // sRGB -> RGB
+									{
+										if(!ApplyScaleAndClamp(color, state)) return nullptr;
+										preScaled = true;
 									}
 									accum += color;
 								}
@@ -1502,10 +1538,10 @@ namespace sw
 		return function("BlitRoutine");
 	}
 
-	Routine *Blitter::getRoutine(const State &state)
+	std::shared_ptr<Routine> Blitter::getBlitRoutine(const State &state)
 	{
-		criticalSection.lock();
-		Routine *blitRoutine = blitCache->query(state);
+		std::unique_lock<std::mutex> lock(blitMutex);
+		auto blitRoutine = blitCache.query(state);
 
 		if(!blitRoutine)
 		{
@@ -1513,20 +1549,170 @@ namespace sw
 
 			if(!blitRoutine)
 			{
-				criticalSection.unlock();
 				UNIMPLEMENTED("blitRoutine");
 				return nullptr;
 			}
 
-			blitCache->add(state, blitRoutine);
+			blitCache.add(state, blitRoutine);
 		}
-
-		criticalSection.unlock();
 
 		return blitRoutine;
 	}
 
-	void Blitter::blit(vk::Image *src, vk::Image *dst, VkImageBlit region, VkFilter filter)
+	std::shared_ptr<Routine> Blitter::getCornerUpdateRoutine(const State &state)
+	{
+		std::unique_lock<std::mutex> lock(cornerUpdateMutex);
+		auto cornerUpdateRoutine = cornerUpdateCache.query(state);
+
+		if(!cornerUpdateRoutine)
+		{
+			cornerUpdateRoutine = generateCornerUpdate(state);
+
+			if(!cornerUpdateRoutine)
+			{
+				UNIMPLEMENTED("cornerUpdateRoutine");
+				return nullptr;
+			}
+
+			cornerUpdateCache.add(state, cornerUpdateRoutine);
+		}
+
+		return cornerUpdateRoutine;
+	}
+
+	void Blitter::blitToBuffer(const vk::Image *src, VkImageSubresourceLayers subresource, VkOffset3D offset, VkExtent3D extent, uint8_t *dst, int bufferRowPitch, int bufferSlicePitch)
+	{
+		auto aspect = static_cast<VkImageAspectFlagBits>(subresource.aspectMask);
+		auto format = src->getFormat(aspect);
+		State state(format, format.getNonQuadLayoutFormat(), VK_SAMPLE_COUNT_1_BIT, VK_SAMPLE_COUNT_1_BIT,
+					{false, false});
+
+		auto blitRoutine = getBlitRoutine(state);
+		if(!blitRoutine)
+		{
+			return;
+		}
+
+		void(*blitFunction)(const BlitData *data) = (void(*)(const BlitData*))blitRoutine->getEntry();
+
+		BlitData data =
+		{
+			nullptr, // source
+			dst, // dest
+			src->rowPitchBytes(aspect, subresource.mipLevel),   // sPitchB
+			bufferRowPitch,   // dPitchB
+			src->slicePitchBytes(aspect, subresource.mipLevel), // sSliceB
+			bufferSlicePitch, // dSliceB
+
+			0, 0, 1, 1,
+
+			0, // y0d
+			static_cast<int>(extent.height), // y1d
+			0, // x0d
+			static_cast<int>(extent.width), // x1d
+
+			static_cast<int>(extent.width), // sWidth
+			static_cast<int>(extent.height) // sHeight;
+		};
+
+		VkOffset3D srcOffset = { 0, 0, offset.z };
+
+		VkImageSubresourceLayers srcSubresLayers = subresource;
+		srcSubresLayers.layerCount = 1;
+
+		VkImageSubresourceRange srcSubresRange =
+		{
+			subresource.aspectMask,
+			subresource.mipLevel,
+			1,
+			subresource.baseArrayLayer,
+			subresource.layerCount
+		};
+
+		uint32_t lastLayer = src->getLastLayerIndex(srcSubresRange);
+
+		for(; srcSubresLayers.baseArrayLayer <= lastLayer; srcSubresLayers.baseArrayLayer++)
+		{
+			srcOffset.z = offset.z;
+
+			for(auto i = 0u; i < extent.depth; i++)
+			{
+				data.source = src->getTexelPointer(srcOffset, srcSubresLayers);
+				ASSERT(data.source < src->end());
+				blitFunction(&data);
+				srcOffset.z++;
+				data.dest = (dst += bufferSlicePitch);
+			}
+		}
+	}
+
+	void Blitter::blitFromBuffer(const vk::Image *dst, VkImageSubresourceLayers subresource, VkOffset3D offset, VkExtent3D extent, uint8_t *src, int bufferRowPitch, int bufferSlicePitch)
+	{
+		auto aspect = static_cast<VkImageAspectFlagBits>(subresource.aspectMask);
+		auto format = dst->getFormat(aspect);
+		State state(format.getNonQuadLayoutFormat(), format, VK_SAMPLE_COUNT_1_BIT, VK_SAMPLE_COUNT_1_BIT,
+					{false, false});
+
+		auto blitRoutine = getBlitRoutine(state);
+		if(!blitRoutine)
+		{
+			return;
+		}
+
+		void(*blitFunction)(const BlitData *data) = (void(*)(const BlitData*))blitRoutine->getEntry();
+
+		BlitData data =
+		{
+			src, // source
+			nullptr, // dest
+			bufferRowPitch,   // sPitchB
+			dst->rowPitchBytes(aspect, subresource.mipLevel),   // dPitchB
+			bufferSlicePitch, // sSliceB
+			dst->slicePitchBytes(aspect, subresource.mipLevel), // dSliceB
+
+			0, 0, 1, 1,
+
+			offset.y, // y0d
+			static_cast<int>(offset.y + extent.height), // y1d
+			offset.x, // x0d
+			static_cast<int>(offset.x + extent.width), // x1d
+
+			static_cast<int>(extent.width), // sWidth
+			static_cast<int>(extent.height) // sHeight;
+		};
+
+		VkOffset3D dstOffset = { 0, 0, offset.z };
+
+		VkImageSubresourceLayers dstSubresLayers = subresource;
+		dstSubresLayers.layerCount = 1;
+
+		VkImageSubresourceRange dstSubresRange =
+		{
+			subresource.aspectMask,
+			subresource.mipLevel,
+			1,
+			subresource.baseArrayLayer,
+			subresource.layerCount
+		};
+
+		uint32_t lastLayer = dst->getLastLayerIndex(dstSubresRange);
+
+		for(; dstSubresLayers.baseArrayLayer <= lastLayer; dstSubresLayers.baseArrayLayer++)
+		{
+			dstOffset.z = offset.z;
+
+			for(auto i = 0u; i < extent.depth; i++)
+			{
+				data.dest = dst->getTexelPointer(dstOffset, dstSubresLayers);
+				ASSERT(data.dest < dst->end());
+				blitFunction(&data);
+				dstOffset.z++;
+				data.source = (src += bufferSlicePitch);
+			}
+		}
+	}
+
+	void Blitter::blit(const vk::Image *src, vk::Image *dst, VkImageBlit region, VkFilter filter)
 	{
 		if(dst->getFormat() == VK_FORMAT_UNDEFINED)
 		{
@@ -1551,13 +1737,12 @@ namespace sw
 			std::swap(region.dstOffsets[0].y, region.dstOffsets[1].y);
 		}
 
-		VkExtent3D srcExtent = src->getMipLevelExtent(region.srcSubresource.mipLevel);
+		VkImageAspectFlagBits srcAspect = static_cast<VkImageAspectFlagBits>(region.srcSubresource.aspectMask);
+		VkImageAspectFlagBits dstAspect = static_cast<VkImageAspectFlagBits>(region.dstSubresource.aspectMask);
+		VkExtent3D srcExtent = src->getMipLevelExtent(srcAspect, region.srcSubresource.mipLevel);
 
 		int32_t numSlices = (region.srcOffsets[1].z - region.srcOffsets[0].z);
 		ASSERT(numSlices == (region.dstOffsets[1].z - region.dstOffsets[0].z));
-
-		VkImageAspectFlagBits srcAspect = static_cast<VkImageAspectFlagBits>(region.srcSubresource.aspectMask);
-		VkImageAspectFlagBits dstAspect = static_cast<VkImageAspectFlagBits>(region.dstSubresource.aspectMask);
 
 		float widthRatio = static_cast<float>(region.srcOffsets[1].x - region.srcOffsets[0].x) /
 		                   static_cast<float>(region.dstOffsets[1].x - region.dstOffsets[0].x);
@@ -1568,14 +1753,14 @@ namespace sw
 
 		bool doFilter = (filter != VK_FILTER_NEAREST);
 		State state(src->getFormat(srcAspect), dst->getFormat(dstAspect), src->getSampleCountFlagBits(), dst->getSampleCountFlagBits(),
-		            { doFilter, srcAspect == VK_IMAGE_ASPECT_STENCIL_BIT, doFilter });
+		            { doFilter, doFilter || (src->getSampleCountFlagBits() > 1) });
 		state.clampToEdge = (region.srcOffsets[0].x < 0) ||
 		                    (region.srcOffsets[0].y < 0) ||
 		                    (static_cast<uint32_t>(region.srcOffsets[1].x) > srcExtent.width) ||
 		                    (static_cast<uint32_t>(region.srcOffsets[1].y) > srcExtent.height) ||
 		                    (doFilter && ((x0 < 0.5f) || (y0 < 0.5f)));
 
-		Routine *blitRoutine = getRoutine(state);
+		auto blitRoutine = getBlitRoutine(state);
 		if(!blitRoutine)
 		{
 			return;
@@ -1653,6 +1838,209 @@ namespace sw
 				srcOffset.z++;
 				dstOffset.z++;
 			}
+		}
+	}
+
+	void Blitter::computeCubeCorner(Pointer<Byte>& layer, Int& x0, Int& x1, Int& y0, Int& y1, Int& pitchB, const State& state)
+	{
+		int bytes = state.sourceFormat.bytes();
+		bool quadLayout = state.sourceFormat.hasQuadLayout();
+
+		Float4 c0;
+		read(c0, layer + ComputeOffset(x0, y1, pitchB, bytes, quadLayout), state);
+		Float4 c1;
+		read(c1, layer + ComputeOffset(x1, y0, pitchB, bytes, quadLayout), state);
+		c0 += c1;
+		read(c1, layer + ComputeOffset(x1, y1, pitchB, bytes, quadLayout), state);
+		c0 += c1;
+		c0 *= Float4(1.0f / 3.0f);
+		write(c0, layer + ComputeOffset(x0, y0, pitchB, bytes, quadLayout), state);
+	}
+
+	std::shared_ptr<Routine> Blitter::generateCornerUpdate(const State& state)
+	{
+		// Reading and writing from/to the same image
+		ASSERT(state.sourceFormat == state.destFormat);
+		ASSERT(state.srcSamples == state.destSamples);
+
+		if(state.srcSamples != 1)
+		{
+			UNIMPLEMENTED("state.srcSamples %d", state.srcSamples);
+		}
+
+		Function<Void(Pointer<Byte>)> function;
+		{
+			Pointer<Byte> blit(function.Arg<0>());
+
+			Pointer<Byte> layers = *Pointer<Pointer<Byte>>(blit + OFFSET(CubeBorderData, layers));
+			Int pitchB = *Pointer<Int>(blit + OFFSET(CubeBorderData, pitchB));
+			UInt layerSize = *Pointer<Int>(blit + OFFSET(CubeBorderData, layerSize));
+			UInt dim = *Pointer<Int>(blit + OFFSET(CubeBorderData, dim));
+
+			// Low Border, Low Pixel, High Border, High Pixel
+			Int LB(-1), LP(0), HB(dim), HP(dim-1);
+
+			for(int face = 0; face < 6; face++)
+			{
+				computeCubeCorner(layers, LB, LP, LB, LP, pitchB, state);
+				computeCubeCorner(layers, LB, LP, HB, HP, pitchB, state);
+				computeCubeCorner(layers, HB, HP, LB, LP, pitchB, state);
+				computeCubeCorner(layers, HB, HP, HB, HP, pitchB, state);
+				layers = layers + layerSize;
+			}
+		}
+
+		return function("BlitRoutine");
+	}
+
+	void Blitter::updateBorders(vk::Image* image, const VkImageSubresourceLayers& subresourceLayers)
+	{
+		if(image->getArrayLayers() < (subresourceLayers.baseArrayLayer + 6))
+		{
+			UNIMPLEMENTED("image->getArrayLayers() %d, baseArrayLayer %d",
+			              image->getArrayLayers(), subresourceLayers.baseArrayLayer);
+		}
+
+		// From Vulkan 1.1 spec, section 11.5. Image Views:
+		// "For cube and cube array image views, the layers of the image view starting
+		//  at baseArrayLayer correspond to faces in the order +X, -X, +Y, -Y, +Z, -Z."
+		VkImageSubresourceLayers posX = subresourceLayers;
+		posX.layerCount = 1;
+		VkImageSubresourceLayers negX = posX;
+		negX.baseArrayLayer++;
+		VkImageSubresourceLayers posY = negX;
+		posY.baseArrayLayer++;
+		VkImageSubresourceLayers negY = posY;
+		negY.baseArrayLayer++;
+		VkImageSubresourceLayers posZ = negY;
+		posZ.baseArrayLayer++;
+		VkImageSubresourceLayers negZ = posZ;
+		negZ.baseArrayLayer++;
+
+		// Copy top / bottom
+		copyCubeEdge(image, posX, BOTTOM, negY, RIGHT);
+		copyCubeEdge(image, posY, BOTTOM, posZ, TOP);
+		copyCubeEdge(image, posZ, BOTTOM, negY, TOP);
+		copyCubeEdge(image, negX, BOTTOM, negY, LEFT);
+		copyCubeEdge(image, negY, BOTTOM, negZ, BOTTOM);
+		copyCubeEdge(image, negZ, BOTTOM, negY, BOTTOM);
+
+		copyCubeEdge(image, posX, TOP, posY, RIGHT);
+		copyCubeEdge(image, posY, TOP, negZ, TOP);
+		copyCubeEdge(image, posZ, TOP, posY, BOTTOM);
+		copyCubeEdge(image, negX, TOP, posY, LEFT);
+		copyCubeEdge(image, negY, TOP, posZ, BOTTOM);
+		copyCubeEdge(image, negZ, TOP, posY, TOP);
+
+		// Copy left / right
+		copyCubeEdge(image, posX, RIGHT, negZ, LEFT);
+		copyCubeEdge(image, posY, RIGHT, posX, TOP);
+		copyCubeEdge(image, posZ, RIGHT, posX, LEFT);
+		copyCubeEdge(image, negX, RIGHT, posZ, LEFT);
+		copyCubeEdge(image, negY, RIGHT, posX, BOTTOM);
+		copyCubeEdge(image, negZ, RIGHT, negX, LEFT);
+
+		copyCubeEdge(image, posX, LEFT, posZ, RIGHT);
+		copyCubeEdge(image, posY, LEFT, negX, TOP);
+		copyCubeEdge(image, posZ, LEFT, negX, RIGHT);
+		copyCubeEdge(image, negX, LEFT, negZ, RIGHT);
+		copyCubeEdge(image, negY, LEFT, negX, BOTTOM);
+		copyCubeEdge(image, negZ, LEFT, posX, RIGHT);
+
+		// Compute corner colors
+		VkImageAspectFlagBits aspect = static_cast<VkImageAspectFlagBits>(subresourceLayers.aspectMask);
+		vk::Format format = image->getFormat(aspect);
+		VkSampleCountFlagBits samples = image->getSampleCountFlagBits();
+		State state(format, format, samples, samples, { 0xF });
+
+		if(samples != VK_SAMPLE_COUNT_1_BIT)
+		{
+			UNIMPLEMENTED("Multi-sampled cube: %d samples", static_cast<int>(samples));
+		}
+
+		auto cornerUpdateRoutine = getCornerUpdateRoutine(state);
+		if(!cornerUpdateRoutine)
+		{
+			return;
+		}
+
+		void(*cornerUpdateFunction)(const CubeBorderData *data) = (void(*)(const CubeBorderData*))cornerUpdateRoutine->getEntry();
+
+		VkExtent3D extent = image->getMipLevelExtent(aspect, subresourceLayers.mipLevel);
+		CubeBorderData data =
+		{
+			image->getTexelPointer({ 0, 0, 0 }, posX),
+			image->rowPitchBytes(aspect, subresourceLayers.mipLevel),
+			static_cast<uint32_t>(image->getLayerSize(aspect)),
+			extent.width
+		};
+		cornerUpdateFunction(&data);
+	}
+
+	void Blitter::copyCubeEdge(vk::Image* image,
+	                           const VkImageSubresourceLayers& dstSubresourceLayers, Edge dstEdge,
+	                           const VkImageSubresourceLayers& srcSubresourceLayers, Edge srcEdge)
+	{
+		ASSERT(srcSubresourceLayers.aspectMask == dstSubresourceLayers.aspectMask);
+		ASSERT(srcSubresourceLayers.mipLevel == dstSubresourceLayers.mipLevel);
+		ASSERT(srcSubresourceLayers.baseArrayLayer != dstSubresourceLayers.baseArrayLayer);
+		ASSERT(srcSubresourceLayers.layerCount == 1);
+		ASSERT(dstSubresourceLayers.layerCount == 1);
+
+		// Figure out if the edges to be copied in reverse order respectively from one another
+		// The copy should be reversed whenever the same edges are contiguous or if we're
+		// copying top <-> right or bottom <-> left. This is explained by the layout, which is:
+		//
+		//      | +y |
+		// | -x | +z | +x | -z |
+		//      | -y |
+
+		bool reverse = (srcEdge == dstEdge) ||
+		               ((srcEdge == TOP) && (dstEdge == RIGHT)) ||
+		               ((srcEdge == RIGHT) && (dstEdge == TOP)) ||
+		               ((srcEdge == BOTTOM) && (dstEdge == LEFT)) ||
+		               ((srcEdge == LEFT) && (dstEdge == BOTTOM));
+
+		VkImageAspectFlagBits aspect = static_cast<VkImageAspectFlagBits>(srcSubresourceLayers.aspectMask);
+		int bytes = image->getFormat(aspect).bytes();
+		int pitchB = image->rowPitchBytes(aspect, srcSubresourceLayers.mipLevel);
+
+		VkExtent3D extent = image->getMipLevelExtent(aspect, srcSubresourceLayers.mipLevel);
+		int w = extent.width;
+		int h = extent.height;
+		if(w != h)
+		{
+			UNIMPLEMENTED("Cube doesn't have square faces : (%d, %d)", w, h);
+		}
+
+		// Src is expressed in the regular [0, width-1], [0, height-1] space
+		bool srcHorizontal = ((srcEdge == TOP) || (srcEdge == BOTTOM));
+		int srcDelta = srcHorizontal ? bytes : pitchB;
+		VkOffset3D srcOffset = { (srcEdge == RIGHT) ? (w - 1) : 0, (srcEdge == BOTTOM) ? (h - 1) : 0, 0 };
+
+		// Dst contains borders, so it is expressed in the [-1, width], [-1, height] space
+		bool dstHorizontal = ((dstEdge == TOP) || (dstEdge == BOTTOM));
+		int dstDelta = (dstHorizontal ? bytes : pitchB) * (reverse ? -1 : 1);
+		VkOffset3D dstOffset = { (dstEdge == RIGHT) ? w : -1, (dstEdge == BOTTOM) ? h : -1, 0 };
+
+		// Don't write in the corners
+		if(dstHorizontal)
+		{
+			dstOffset.x += reverse ? w : 1;
+		}
+		else
+		{
+			dstOffset.y += reverse ? h : 1;
+		}
+
+		const uint8_t* src = static_cast<const uint8_t*>(image->getTexelPointer(srcOffset, srcSubresourceLayers));
+		uint8_t *dst = static_cast<uint8_t*>(image->getTexelPointer(dstOffset, dstSubresourceLayers));
+		ASSERT((src < image->end()) && ((src + (w * srcDelta)) < image->end()));
+		ASSERT((dst < image->end()) && ((dst + (w * dstDelta)) < image->end()));
+
+		for(int i = 0; i < w; ++i, dst += dstDelta, src += srcDelta)
+		{
+			memcpy(dst, src, bytes);
 		}
 	}
 }

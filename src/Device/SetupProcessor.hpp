@@ -32,21 +32,20 @@ namespace sw
 	class SetupProcessor
 	{
 	public:
-		struct States
+		struct States : Memset<States>
 		{
-			unsigned int computeHash();
+			States() : Memset(this, 0) {}
+
+			uint32_t computeHash();
 
 			bool isDrawPoint               : 1;
 			bool isDrawLine                : 1;
 			bool isDrawTriangle            : 1;
 			bool interpolateZ              : 1;
 			bool interpolateW              : 1;
-			bool perspective               : 1;
-			bool frontFacingCCW            : 1;
+			VkFrontFace frontFace          : BITS(VK_FRONT_FACE_MAX_ENUM);
 			VkCullModeFlags cullMode       : BITS(VK_CULL_MODE_FLAG_BITS_MAX_ENUM);
-			bool twoSidedStencil           : 1;
 			bool slopeDepthBias            : 1;
-			bool vFace                     : 1;
 			unsigned int multiSample       : 3;   // 1, 2 or 4
 			bool rasterizerDiscard         : 1;
 
@@ -55,28 +54,24 @@ namespace sw
 
 		struct State : States
 		{
-			State(int i = 0);
-
 			bool operator==(const State &states) const;
 
-			unsigned int hash;
+			uint32_t hash;
 		};
 
 		typedef bool (*RoutinePointer)(Primitive *primitive, const Triangle *triangle, const Polygon *polygon, const DrawData *draw);
 
-		SetupProcessor(Context *context);
+		SetupProcessor();
 
 		~SetupProcessor();
 
 	protected:
-		State update() const;
-		Routine *routine(const State &state);
+		State update(const sw::Context* context) const;
+		std::shared_ptr<Routine> routine(const State &state);
 
 		void setRoutineCacheSize(int cacheSize);
 
 	private:
-		Context *const context;
-
 		RoutineCache<State> *routineCache;
 	};
 }

@@ -20,96 +20,31 @@
 #include "SetupProcessor.hpp"
 #include "Plane.hpp"
 #include "Blitter.hpp"
-#include "System/MutexLock.hpp"
-#include "System/Thread.hpp"
 #include "Device/Config.hpp"
+#include "System/Synchronization.hpp"
 #include "Vulkan/VkDescriptorSet.hpp"
 
+#include <atomic>
 #include <list>
+#include <mutex>
+#include <thread>
 
 namespace vk
 {
 	class DescriptorSet;
+	class Device;
+	class Query;
 }
 
 namespace sw
 {
-	class Clipper;
 	struct DrawCall;
 	class PixelShader;
 	class VertexShader;
-	class SwiftConfig;
 	struct Task;
+	class TaskEvents;
 	class Resource;
 	struct Constants;
-
-	enum TranscendentalPrecision
-	{
-		APPROXIMATE,
-		PARTIAL,	// 2^-10
-		ACCURATE,
-		WHQL,		// 2^-21
-		IEEE		// 2^-23
-	};
-
-	extern TranscendentalPrecision logPrecision;
-	extern TranscendentalPrecision expPrecision;
-	extern TranscendentalPrecision rcpPrecision;
-	extern TranscendentalPrecision rsqPrecision;
-	extern bool perspectiveCorrection;
-
-	struct Conventions
-	{
-		bool halfIntegerCoordinates;
-		bool symmetricNormalizedDepth;
-		bool booleanFaceRegister;
-		bool fullPixelPositionRegister;
-		bool colorsDefaultToZero;
-	};
-
-	static const Conventions OpenGL =
-	{
-		true,    // halfIntegerCoordinates
-		true,    // symmetricNormalizedDepth
-		true,    // booleanFaceRegister
-		true,    // fullPixelPositionRegister
-		true,    // colorsDefaultToZero
-	};
-
-	static const Conventions Direct3D =
-	{
-		false,   // halfIntegerCoordinates
-		false,   // symmetricNormalizedDepth
-		false,   // booleanFaceRegister
-		false,   // fullPixelPositionRegister
-		false,   // colorsDefaultToZero
-	};
-
-	struct Query
-	{
-		enum Type { FRAGMENTS_PASSED, TRANSFORM_FEEDBACK_PRIMITIVES_WRITTEN };
-
-		Query(Type type) : building(false), reference(0), data(0), type(type)
-		{
-		}
-
-		void begin()
-		{
-			building = true;
-			data = 0;
-		}
-
-		void end()
-		{
-			building = false;
-		}
-
-		bool building;
-		AtomicInt reference;
-		AtomicInt data;
-
-		const Type type;
-	};
 
 	struct DrawData
 	{
@@ -118,21 +53,17 @@ namespace sw
 		vk::DescriptorSet::Bindings descriptorSets = {};
 		vk::DescriptorSet::DynamicOffsets descriptorDynamicOffsets = {};
 
-		const void *input[MAX_VERTEX_INPUTS];
-		unsigned int stride[MAX_VERTEX_INPUTS];
-		Texture mipmap[TOTAL_IMAGE_UNITS];
+		const void *input[MAX_INTERFACE_COMPONENTS / 4];
+		unsigned int stride[MAX_INTERFACE_COMPONENTS / 4];
 		const void *indices;
 
 		int instanceID;
+		int baseVertex;
 		float lineWidth;
 
 		PixelProcessor::Stencil stencil[2];   // clockwise, counterclockwise
 		PixelProcessor::Factor factor;
 		unsigned int occlusion[16];   // Number of pixels passing depth test
-
-		#if PERF_PROFILE
-			int64_t cycles[PERF_TIMERS][16];
-		#endif
 
 		float4 Wx16;
 		float4 Hx16;
@@ -144,7 +75,6 @@ namespace sw
 		float slopeDepthBias;
 		float depthRange;
 		float depthNear;
-		Plane clipPlane[6];
 
 		unsigned int *colorBuffer[RENDERTARGETS];
 		int colorPitchB[RENDERTARGETS];
@@ -182,9 +112,16 @@ namespace sw
 				SUSPEND
 			};
 
-			AtomicInt type;
-			AtomicInt primitiveUnit;
-			AtomicInt pixelCluster;
+			void operator=(const Task& task)
+			{
+				type = task.type.load();
+				primitiveUnit = task.primitiveUnit.load();
+				pixelCluster = task.pixelCluster.load();
+			}
+
+			std::atomic<int> type;
+			std::atomic<int> primitiveUnit;
+			std::atomic<int> pixelCluster;
 		};
 
 		struct PrimitiveProgress
@@ -198,11 +135,11 @@ namespace sw
 				references = 0;
 			}
 
-			AtomicInt drawCall;
-			AtomicInt firstPrimitive;
-			AtomicInt primitiveCount;
-			AtomicInt visible;
-			AtomicInt references;
+			std::atomic<int> drawCall;
+			std::atomic<int> firstPrimitive;
+			std::atomic<int> primitiveCount;
+			std::atomic<int> visible;
+			std::atomic<int> references;
 		};
 
 		struct PixelProgress
@@ -214,56 +151,33 @@ namespace sw
 				executing = false;
 			}
 
-			AtomicInt drawCall;
-			AtomicInt processedPrimitives;
-			AtomicInt executing;
+			std::atomic<int> drawCall;
+			std::atomic<int> processedPrimitives;
+			std::atomic<int> executing;
 		};
 
 	public:
-		Renderer(Context *context, Conventions conventions, bool exactColorRounding);
+		Renderer(vk::Device* device);
 
 		virtual ~Renderer();
 
 		void *operator new(size_t size);
 		void operator delete(void * mem);
 
-		void draw(VkPrimitiveTopology topology, VkIndexType indexType, unsigned int count, bool update = true);
+		bool hasQueryOfType(VkQueryType type) const;
 
-		void setContext(const sw::Context& context);
-
-		void setMultiSampleMask(unsigned int mask);
-		void setTransparencyAntialiasing(TransparencyAntialiasing transparencyAntialiasing);
-
-		void setLineWidth(float width);
-
-		void setDepthBias(float bias);
-		void setSlopeDepthBias(float slopeBias);
-
-		void setRasterizerDiscard(bool rasterizerDiscard);
-
-		// Programmable pipelines
-		void setPixelShader(const SpirvShader *shader);
-		void setVertexShader(const SpirvShader *shader);
+		void draw(const sw::Context* context, VkIndexType indexType, unsigned int count, int baseVertex, TaskEvents *events, bool update = true);
 
 		// Viewport & Clipper
 		void setViewport(const VkViewport &viewport);
 		void setScissor(const VkRect2D &scissor);
 
-		void addQuery(Query *query);
-		void removeQuery(Query *query);
+		void addQuery(vk::Query *query);
+		void removeQuery(vk::Query *query);
 
-		void advanceInstanceAttributes();
+		void advanceInstanceAttributes(Stream* inputs);
 
 		void synchronize();
-
-		#if PERF_HUD
-			// Performance timers
-			int getThreadCount();
-			int64_t getVertexTime(int thread);
-			int64_t getSetupTime(int thread);
-			int64_t getPixelTime(int thread);
-			void resetTimers();
-		#endif
 
 		static int getClusterCount() { return clusterCount; }
 
@@ -289,19 +203,15 @@ namespace sw
 		void initializeThreads();
 		void terminateThreads();
 
-		Context *context;
-		Clipper *clipper;
-		Blitter *blitter;
 		VkViewport viewport;
 		VkRect2D scissor;
-		int clipFlags;
 
 		Triangle *triangleBatch[16];
 		Primitive *primitiveBatch[16];
 
-		AtomicInt exitThreads;
-		AtomicInt threadsAwake;
-		Thread *worker[16];
+		std::atomic<int> exitThreads;
+		std::atomic<int> threadsAwake;
+		std::thread *worker[16];
 		Event *resume[16];         // Events for resuming threads
 		Event *suspend[16];        // Events for suspending threads
 		Event *resumeApp;          // Event for resuming the application thread
@@ -317,42 +227,36 @@ namespace sw
 		DrawCall *drawCall[DRAW_COUNT];
 		DrawCall *drawList[DRAW_COUNT];
 
-		AtomicInt currentDraw;
-		AtomicInt nextDraw;
+		std::atomic<int> currentDraw;
+		std::atomic<int> nextDraw;
 
 		enum {
 			TASK_COUNT = 32,   // Size of the task queue (must be power of 2)
 			TASK_COUNT_BITS = TASK_COUNT - 1,
 		};
 		Task taskQueue[TASK_COUNT];
-		AtomicInt qHead;
-		AtomicInt qSize;
+		std::atomic<int> qHead;
+		std::atomic<int> qSize;
 
-		static AtomicInt unitCount;
-		static AtomicInt clusterCount;
+		static std::atomic<int> unitCount;
+		static std::atomic<int> clusterCount;
 
-		MutexLock schedulerMutex;
-
-		#if PERF_HUD
-			int64_t vertexTime[16];
-			int64_t setupTime[16];
-			int64_t pixelTime[16];
-		#endif
+		std::mutex schedulerMutex;
 
 		VertexTask *vertexTask[16];
 
-		SwiftConfig *swiftConfig;
-
-		std::list<Query*> queries;
-		Resource *sync;
+		std::list<vk::Query*> queries;
+		WaitGroup sync;
 
 		VertexProcessor::State vertexState;
 		SetupProcessor::State setupState;
 		PixelProcessor::State pixelState;
 
-		Routine *vertexRoutine;
-		Routine *setupRoutine;
-		Routine *pixelRoutine;
+		std::shared_ptr<Routine> vertexRoutine;
+		std::shared_ptr<Routine> setupRoutine;
+		std::shared_ptr<Routine> pixelRoutine;
+
+		vk::Device* device;
 	};
 
 	struct DrawCall
@@ -361,13 +265,13 @@ namespace sw
 
 		~DrawCall();
 
-		AtomicInt topology;
-		AtomicInt indexType;
-		AtomicInt batchSize;
+		std::atomic<int> topology;
+		std::atomic<int> indexType;
+		std::atomic<int> batchSize;
 
-		Routine *vertexRoutine;
-		Routine *setupRoutine;
-		Routine *pixelRoutine;
+		std::shared_ptr<Routine> vertexRoutine;
+		std::shared_ptr<Routine> setupRoutine;
+		std::shared_ptr<Routine> pixelRoutine;
 
 		VertexProcessor::RoutinePointer vertexPointer;
 		SetupProcessor::RoutinePointer setupPointer;
@@ -379,12 +283,13 @@ namespace sw
 		vk::ImageView *renderTarget[RENDERTARGETS];
 		vk::ImageView *depthBuffer;
 		vk::ImageView *stencilBuffer;
+		TaskEvents *events;
 
-		std::list<Query*> *queries;
+		std::list<vk::Query*> *queries;
 
-		AtomicInt primitive;    // Current primitive to enter pipeline
-		AtomicInt count;        // Number of primitives to render
-		AtomicInt references;   // Remaining references to this draw call, 0 when done drawing, -1 when resources unlocked and slot is free
+		std::atomic<int> primitive;    // Current primitive to enter pipeline
+		std::atomic<int> count;        // Number of primitives to render
+		std::atomic<int> references;   // Remaining references to this draw call, 0 when done drawing, -1 when resources unlocked and slot is free
 
 		DrawData *data;
 	};

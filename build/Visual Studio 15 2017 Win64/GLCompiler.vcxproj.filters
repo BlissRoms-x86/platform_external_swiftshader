@@ -240,16 +240,16 @@
   </ItemGroup>
   <ItemGroup>
     <Filter Include="src">
-      <UniqueIdentifier>{1D32CFC4-3897-312A-881D-1722E268FA32}</UniqueIdentifier>
+      <UniqueIdentifier>{4CBE9297-1779-302D-AF01-5C79A790DED5}</UniqueIdentifier>
     </Filter>
     <Filter Include="src\OpenGL">
-      <UniqueIdentifier>{290F2129-951C-3257-8777-9DC8BFFF50AF}</UniqueIdentifier>
+      <UniqueIdentifier>{F6D84093-2476-35F1-9A60-3807139DF63F}</UniqueIdentifier>
     </Filter>
     <Filter Include="src\OpenGL\compiler">
-      <UniqueIdentifier>{A1DAC9E2-7F60-3CE0-81E0-780EFC1C467F}</UniqueIdentifier>
+      <UniqueIdentifier>{F3F4FB2E-6305-3A58-943D-721138922B19}</UniqueIdentifier>
     </Filter>
     <Filter Include="src\OpenGL\compiler\preprocessor">
-      <UniqueIdentifier>{86B2E060-5745-3994-AC91-109FEEAA1A82}</UniqueIdentifier>
+      <UniqueIdentifier>{6D5E69E1-B243-3D9B-BD21-8A529AB2F2E1}</UniqueIdentifier>
     </Filter>
   </ItemGroup>
 </Project>

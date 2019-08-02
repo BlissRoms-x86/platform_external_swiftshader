@@ -14,7 +14,7 @@
 
 #include "Driver.hpp"
 
-#if defined(_WIN64)
+#if defined(_WIN32)
 #    include "Windows.h"
 #    define OS_WINDOWS 1
 #elif defined(__APPLE__)
@@ -32,11 +32,11 @@
 
 Driver::Driver() : vk_icdGetInstanceProcAddr(nullptr), dll(nullptr)
 {
-#define VK_GLOBAL(N, R, ...) N = nullptr;
+#define VK_GLOBAL(N, R, ...) N = nullptr
 #include "VkGlobalFuncs.hpp"
 #undef VK_GLOBAL
 
-#define VK_INSTANCE(N, R, ...) N = nullptr;
+#define VK_INSTANCE(N, R, ...) N = nullptr
 #include "VkInstanceFuncs.hpp"
 #undef VK_INSTANCE
 }
@@ -49,19 +49,39 @@ Driver::~Driver()
 bool Driver::loadSwiftShader()
 {
 #if OS_WINDOWS
-#    if defined(NDEBUG)
-    return load("../../build/Release_x64/vk_swiftshader.dll");
-#    else
-    return load("../../build/Debug_x64/vk_swiftshader.dll");
-#    endif
+	#if !defined(STANDALONE)
+		// The DLL is delay loaded (see BUILD.gn), so we can load
+		// the correct ones from Chrome's swiftshader subdirectory.
+		HMODULE libvulkan = LoadLibraryA("swiftshader\\libvulkan.dll");
+		EXPECT_NE((HMODULE)NULL, libvulkan);
+		return true;
+	#elif defined(NDEBUG)
+		#if defined(_WIN64)
+			return load("./build/Release_x64/vk_swiftshader.dll") ||
+		#else
+			return load("./build/Release_Win32/vk_swiftshader.dll") ||
+		#endif
+			       load("./build/Release/libvk_swiftshader.dll");
+	#else
+		#if defined(_WIN64)
+			return load("./build/Debug_x64/vk_swiftshader.dll") ||
+		#else
+			return load("./build/Debug_Win32/vk_swiftshader.dll") ||
+		#endif
+			       load("./build/Debug/libvk_swiftshader.dll");
+	#endif
 #elif OS_MAC
-    return load("./build/Darwin/libvk_swiftshader.dylib");
+	return load("./build/Darwin/libvk_swiftshader.dylib") ||
+	       load("swiftshader/libvulkan.dylib") ||
+	       load("libvk_swiftshader.dylib");
 #elif OS_LINUX
-    return load("./build/Linux/libvk_swiftshader.so");
+	return load("./build/Linux/libvk_swiftshader.so") ||
+	       load("swiftshader/libvulkan.so") ||
+	       load("libvk_swiftshader.so");
 #elif OS_ANDROID
-    return load("libvk_swiftshader.so");
+	return load("libvk_swiftshader.so");
 #else
-#    error Unimplemented platform
+	#error Unimplemented platform
 #endif
 }
 
@@ -122,11 +142,11 @@ void Driver::unload()
     dlclose(dll);
 #endif
 
-#define VK_GLOBAL(N, R, ...) N = nullptr;
+#define VK_GLOBAL(N, R, ...) N = nullptr
 #include "VkGlobalFuncs.hpp"
 #undef VK_GLOBAL
 
-#define VK_INSTANCE(N, R, ...) N = nullptr;
+#define VK_INSTANCE(N, R, ...) N = nullptr
 #include "VkInstanceFuncs.hpp"
 #undef VK_INSTANCE
 }
