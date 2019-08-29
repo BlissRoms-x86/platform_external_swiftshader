@@ -867,6 +867,9 @@ EGLContext EGLAPIENTRY CreateContext(EGLDisplay dpy, EGLConfig config, EGLContex
 					return error(EGL_BAD_ATTRIBUTE, EGL_NO_CONTEXT);
 				}
 				break;
+			case EGL_CONTEXT_PRIORITY_LEVEL_IMG:
+				TRACE("Ignore EGL_CONTEXT_PRIORITY_LEVEL_IMG attribute");
+				break;
 			default:
 				return error(EGL_BAD_ATTRIBUTE, EGL_NO_CONTEXT);
 			}
